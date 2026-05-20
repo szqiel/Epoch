@@ -23,7 +23,11 @@ struct Face
     float Seed;
     int Biome;
     int TreeCount;
+    int EcosystemLevel;
     bool Locked;
+    int VertIdxA;
+    int VertIdxB;
+    int VertIdxC;
 };
 
 struct Particle

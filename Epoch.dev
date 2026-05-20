@@ -9,8 +9,8 @@ Libs=
 PrivateResource=
 ResourceIncludes=
 MakeIncludes=
-Compiler=-DGLUT_STATIC
-CppCompiler=
+Compiler=-DGLUT_STATIC -std=c++11
+CppCompiler=-std=c++11
 Linker=-lglut32 -lglu32 -lopengl32 -lwinmm -lgdi32
 IsCpp=1
 Icon=

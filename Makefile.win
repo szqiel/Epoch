@@ -10,8 +10,8 @@ LIBS     = -L"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib" -L"C:/Program Files (x
 INCS     = -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/mingw32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib/gcc/mingw32/4.8.1/include"
 CXXINCS  = -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/mingw32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib/gcc/mingw32/4.8.1/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib/gcc/mingw32/4.8.1/include/c++"
 BIN      = Epoch.exe
-CXXFLAGS = $(CXXINCS) 
-CFLAGS   = $(INCS) -DGLUT_STATIC
+CXXFLAGS = $(CXXINCS) -std=c++11
+CFLAGS   = $(INCS) -DGLUT_STATIC -std=c++11
 RM       = rm.exe -f
 
 .PHONY: all all-before all-after clean clean-custom

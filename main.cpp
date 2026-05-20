@@ -1,17 +1,32 @@
-#include "GameConfig.h"
-#include "GameTypes.h"
-#include <GL/glut.h>
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <mmsystem.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <ctime>
+#include <cstddef>
 #include <sstream>
 #include <string>
 #include <vector>
+#include <atomic>
+
+#include "GameConfig.h"
+#include "GameTypes.h"
+#include <GL/glut.h>
 
 std::vector<Face> PlanetFaces;
 std::vector<Particle> Particles;
 std::vector<Meteor> Meteors;
+
+std::vector<Vector3> UniqueVertices;
+std::vector<float> VertexHeights;
+int HoveredFace = -1;
+
+float GetGeographyNoise(Vector3 Center);
+int GetOrCreateUniqueVertex(Vector3 V);
+void PlaySfx(int Type);
 
 int WindowWidth = 1280;
 int WindowHeight = 720;
@@ -51,6 +66,7 @@ GLuint MeteorList = 0;
 GLuint UiCircleList = 0;
 GLuint VolcanoList = 0;
 GLuint MountainList = 0;
+GLuint MountainSnowList = 0;
 GLuint IceClusterList = 0;
 
 GLdouble PickModelMatrix[16];
@@ -156,23 +172,20 @@ float BiomeHeight(int Biome) {
 int MatureBiomeForFace(Face &F, float Progress) {
   Vector3 Center = NormalizeVector(ScaleVector(
       AddVector(AddVector(F.BaseA, F.BaseB), F.BaseC), 1.0f / 3.0f));
-  float OceanField = ((float)sin(Center.X * 1.20f + Center.Z * 0.85f + 0.60f) +
-                      (float)cos(Center.Y * 1.15f - Center.X * 1.05f) +
-                      (float)sin((Center.X + Center.Y - Center.Z) * 0.95f)) /
-                     3.0f;
+  float OceanField = GetGeographyNoise(Center);
   float RidgeField = (float)fabs(
       (float)sin(Center.X * 2.20f + Center.Y * 1.10f - Center.Z * 1.80f));
   float Polar = (float)fabs(Center.Y);
   if (Progress > 0.76f && Polar > 0.78f) {
     return BiomeIce;
   }
-  if (OceanField < -0.10f) {
+  if (OceanField < -0.06f) {
     return BiomeOcean;
   }
-  if (OceanField > 0.30f && RidgeField > 0.76f) {
+  if (OceanField > 0.22f && RidgeField > 0.72f) {
     return BiomeMountain;
   }
-  if (Progress > 0.52f && OceanField > 0.06f && F.Seed > 0.35f &&
+  if (Progress > 0.52f && OceanField > 0.08f && F.Seed > 0.35f &&
       F.Seed < 0.82f) {
     return BiomeForest;
   }
@@ -182,19 +195,19 @@ int MatureBiomeForFace(Face &F, float Progress) {
 void ApplyMatureBiome(Face &F, int Target) {
   F.Biome = Target;
   if (Target == BiomeOcean) {
-    F.Height = -0.11f + F.Seed * 0.02f;
+    F.Height = -0.24f + F.Seed * 0.02f;
     F.TreeCount = 0;
   } else if (Target == BiomeLand) {
-    F.Height = 0.025f + F.Seed * 0.022f;
+    F.Height = 0.04f + F.Seed * 0.03f;
     F.TreeCount = 0;
   } else if (Target == BiomeForest) {
-    F.Height = 0.035f + F.Seed * 0.018f;
+    F.Height = 0.06f + F.Seed * 0.025f;
     F.TreeCount = 0;
   } else if (Target == BiomeMountain) {
-    F.Height = 0.070f + F.Seed * 0.038f;
+    F.Height = 0.22f + F.Seed * 0.08f;
     F.TreeCount = 0;
   } else if (Target == BiomeIce) {
-    F.Height = 0.050f + F.Seed * 0.020f;
+    F.Height = 0.08f + F.Seed * 0.03f;
     F.TreeCount = 0;
   }
 }
@@ -227,21 +240,221 @@ void SetMaterial(float R, float G, float B, bool Shiny, bool Glow) {
   glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, Shiny ? 85.0f : 5.0f);
 }
 
-void SetBiomeMaterial(int Biome) {
+namespace SoundSystem {
+  HWAVEOUT hWaveOut = NULL;
+  HANDLE hAudioThread = NULL;
+  std::atomic<bool> ThreadRunning(false);
+  
+  std::atomic<float> TargetFrequency(220.0f);
+  std::atomic<float> TargetVolume(0.12f);
+  std::atomic<int> Waveform(0); // 0 = Sine, 1 = Triangle, 2 = Noise
+  
+  std::atomic<float> SfxAge(-1.0f);
+  std::atomic<int> SfxType(0); // 1 = Blip, 2 = Boom, 3 = Splash
+  
+  const int SampleRate = 22050;
+  const int BufferSize = 2048;
+  short BufferA[BufferSize];
+  short BufferB[BufferSize];
+  WAVEHDR WaveHdrA;
+  WAVEHDR WaveHdrB;
+  
+  void AudioLoop() {
+    float Phase = 0.0f;
+    float CurrentFreq = 220.0f;
+    float CurrentVol = 0.05f;
+    
+    WAVEFORMATEX Format;
+    Format.wFormatTag = WAVE_FORMAT_PCM;
+    Format.nChannels = 1;
+    Format.nSamplesPerSec = SampleRate;
+    Format.nAvgBytesPerSec = SampleRate * 2;
+    Format.nBlockAlign = 2;
+    Format.wBitsPerSample = 16;
+    Format.cbSize = 0;
+    
+    if (waveOutOpen(&hWaveOut, WAVE_MAPPER, &Format, 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
+      return;
+    }
+    
+    memset(&WaveHdrA, 0, sizeof(WAVEHDR));
+    memset(&WaveHdrB, 0, sizeof(WAVEHDR));
+    
+    WaveHdrA.lpData = (LPSTR)BufferA;
+    WaveHdrA.dwBufferLength = BufferSize * 2;
+    WaveHdrB.lpData = (LPSTR)BufferB;
+    WaveHdrB.dwBufferLength = BufferSize * 2;
+    
+    waveOutPrepareHeader(hWaveOut, &WaveHdrA, sizeof(WAVEHDR));
+    waveOutPrepareHeader(hWaveOut, &WaveHdrB, sizeof(WAVEHDR));
+    
+    bool UseBufferA = true;
+    
+    while (ThreadRunning) {
+      WAVEHDR &CurrentHdr = UseBufferA ? WaveHdrA : WaveHdrB;
+      short *CurrentBuf = UseBufferA ? BufferA : BufferB;
+      
+      while (ThreadRunning && !(CurrentHdr.dwFlags & WHDR_DONE) && (CurrentHdr.dwFlags & WHDR_PREPARED)) {
+        Sleep(2);
+      }
+      
+      if (!ThreadRunning) break;
+      
+      if (CurrentHdr.dwFlags & WHDR_PREPARED) {
+        waveOutUnprepareHeader(hWaveOut, &CurrentHdr, sizeof(WAVEHDR));
+      }
+      
+      float TargetFreq = TargetFrequency.load();
+      float TargetVol = TargetVolume.load();
+      
+      for (int I = 0; I < BufferSize; I++) {
+        CurrentFreq += (TargetFreq - CurrentFreq) * 0.005f;
+        CurrentVol += (TargetVol - CurrentVol) * 0.005f;
+        
+        float SampleVal = 0.0f;
+        int WaveType = Waveform.load();
+        if (WaveType == 0) {
+          SampleVal = (float)sin(Phase);
+        } else if (WaveType == 1) {
+          float NormPhase = Phase / (Pi * 2.0f);
+          NormPhase = NormPhase - (int)NormPhase;
+          if (NormPhase < 0.5f) {
+            SampleVal = -1.0f + 4.0f * NormPhase;
+          } else {
+            SampleVal = 3.0f - 4.0f * NormPhase;
+          }
+        } else {
+          SampleVal = ((float)rand() / (float)RAND_MAX - 0.5f) * 2.0f;
+        }
+        
+        // Sfx Mixing
+        float SfxSample = 0.0f;
+        float SfxTime = SfxAge.load();
+        if (SfxTime >= 0.0f) {
+          int Type = SfxType.load();
+          if (Type == 1) {
+            if (SfxTime < 0.15f) {
+              float SfxFreq = 600.0f - SfxTime * 1500.0f;
+              float Env = (0.15f - SfxTime) / 0.15f;
+              SfxSample = (float)sin(SfxTime * SfxFreq * Pi * 2.0f) * Env * 0.35f;
+            } else {
+              SfxAge = -1.0f;
+            }
+          } else if (Type == 2) {
+            if (SfxTime < 0.8f) {
+              float SfxFreq = 120.0f * (1.0f - SfxTime * 0.9f);
+              float Env = (0.8f - SfxTime) / 0.8f;
+              float NoiseVal = ((float)rand() / (float)RAND_MAX - 0.5f) * 2.0f;
+              SfxSample = ((float)sin(SfxTime * SfxFreq * Pi * 2.0f) * 0.6f + NoiseVal * 0.4f) * Env * 0.70f;
+            } else {
+              SfxAge = -1.0f;
+            }
+          } else if (Type == 3) {
+            if (SfxTime < 0.4f) {
+              float Env = (0.4f - SfxTime) / 0.4f;
+              float NoiseVal = ((float)rand() / (float)RAND_MAX - 0.5f) * 2.0f;
+              SfxSample = NoiseVal * Env * 0.30f;
+            } else {
+              SfxAge = -1.0f;
+            }
+          }
+          if (SfxAge.load() >= 0.0f) {
+            SfxAge = SfxTime + 1.0f / (float)SampleRate;
+          }
+        }
+        
+        CurrentBuf[I] = (short)((SampleVal * CurrentVol + SfxSample) * 32767.0f);
+        
+        Phase += (CurrentFreq * Pi * 2.0f) / (float)SampleRate;
+        if (Phase > Pi * 2.0f) {
+          Phase -= Pi * 2.0f;
+        }
+      }
+      
+      CurrentHdr.dwFlags = 0;
+      waveOutPrepareHeader(hWaveOut, &CurrentHdr, sizeof(WAVEHDR));
+      waveOutWrite(hWaveOut, &CurrentHdr, sizeof(WAVEHDR));
+      
+      UseBufferA = !UseBufferA;
+    }
+    
+    waveOutReset(hWaveOut);
+    waveOutUnprepareHeader(hWaveOut, &WaveHdrA, sizeof(WAVEHDR));
+    waveOutUnprepareHeader(hWaveOut, &WaveHdrB, sizeof(WAVEHDR));
+    waveOutClose(hWaveOut);
+  }
+  
+  DWORD WINAPI AudioThreadFunc(LPVOID lpParam) {
+    AudioLoop();
+    return 0;
+  }
+  
+  void Start() {
+    if (ThreadRunning) return;
+    ThreadRunning = true;
+    hAudioThread = CreateThread(NULL, 0, AudioThreadFunc, NULL, 0, NULL);
+  }
+  
+  void Stop() {
+    if (!ThreadRunning) return;
+    ThreadRunning = false;
+    if (hAudioThread != NULL) {
+      WaitForSingleObject(hAudioThread, INFINITE);
+      CloseHandle(hAudioThread);
+      hAudioThread = NULL;
+    }
+  }
+}
+
+void PlaySfx(int Type) {
+  SoundSystem::SfxType = Type;
+  SoundSystem::SfxAge = 0.0f;
+}
+
+float GetGeographyNoise(Vector3 Center) {
+  float LowFreq = ((float)sin(Center.X * 1.8f + Center.Z * 1.4f + 0.6f) +
+                   (float)cos(Center.Y * 1.6f - Center.X * 1.5f) +
+                   (float)sin((Center.X + Center.Y - Center.Z) * 1.4f)) / 3.0f;
+  float HighFreq = ((float)sin(Center.X * 5.2f + Center.Y * 4.2f) +
+                    (float)cos(Center.Z * 4.8f - Center.X * 3.6f)) / 2.0f;
+  return LowFreq * 0.70f + HighFreq * 0.30f;
+}
+
+int GetOrCreateUniqueVertex(Vector3 V) {
+  for (size_t I = 0; I < UniqueVertices.size(); I++) {
+    if (sqrt((UniqueVertices[I].X - V.X)*(UniqueVertices[I].X - V.X) +
+             (UniqueVertices[I].Y - V.Y)*(UniqueVertices[I].Y - V.Y) +
+             (UniqueVertices[I].Z - V.Z)*(UniqueVertices[I].Z - V.Z)) < 0.001f) {
+      return (int)I;
+    }
+  }
+  UniqueVertices.push_back(V);
+  VertexHeights.push_back(0.0f);
+  return (int)(UniqueVertices.size() - 1);
+}
+
+void SetBiomeMaterial(int Biome, int FaceIndex, float Altitude, float Height) {
+  float Var = (float)((FaceIndex * 73 + 123) % 100) / 100.0f * 0.08f - 0.04f;
+
   if (Biome == BiomeOcean) {
-    SetMaterial(0.11f, 0.20f, 0.34f, true, false);
+    SetMaterial(0.11f + Var * 0.3f, 0.20f + Var * 0.4f, 0.34f + Var * 0.5f, true, false);
   } else if (Biome == BiomeLand) {
-    SetMaterial(0.61f, 0.40f, 0.26f, false, false);
+    SetMaterial(0.61f + Var * 0.5f, 0.40f + Var * 0.5f, 0.26f + Var * 0.4f, false, false);
   } else if (Biome == BiomeMountain) {
-    SetMaterial(0.38f, 0.39f, 0.45f, false, false);
+    float Progress = ElapsedSeconds / GameDuration;
+    if (Progress > 0.35f && (Height > 0.062f || (float)fabs(Altitude) > 1.15f)) {
+      SetMaterial(0.92f + Var * 0.1f, 0.94f + Var * 0.1f, 0.96f + Var * 0.1f, true, false);
+    } else {
+      SetMaterial(0.38f + Var * 0.4f, 0.39f + Var * 0.4f, 0.45f + Var * 0.4f, false, false);
+    }
   } else if (Biome == BiomeIce) {
-    SetMaterial(0.94f, 0.98f, 0.93f, true, false);
+    SetMaterial(0.94f + Var * 0.1f, 0.98f + Var * 0.1f, 0.93f + Var * 0.1f, true, false);
   } else if (Biome == BiomeForest) {
-    SetMaterial(0.15f, 0.21f, 0.09f, false, false);
+    SetMaterial(0.15f + Var * 0.3f, 0.21f + Var * 0.4f, 0.09f + Var * 0.2f, false, false);
   } else if (Biome == BiomeMagma) {
-    SetMaterial(0.88f, 0.34f, 0.13f, false, true);
+    SetMaterial(0.88f + Var * 0.2f, 0.34f + Var * 0.3f, 0.13f + Var * 0.1f, false, true);
   } else {
-    SetMaterial(0.24f, 0.24f, 0.22f, false, false);
+    SetMaterial(0.24f + Var * 0.3f, 0.24f + Var * 0.3f, 0.22f + Var * 0.3f, false, false);
   }
 }
 
@@ -255,28 +468,27 @@ void AddSubdividedFace(std::vector<Face> &Faces, Vector3 A, Vector3 B,
     NewFace.BaseA = NormalizeVector(A);
     NewFace.BaseB = NormalizeVector(B);
     NewFace.BaseC = NormalizeVector(C);
-    NewFace.Height = (Noise - 0.5f) * 0.03f;
+    NewFace.VertIdxA = GetOrCreateUniqueVertex(NewFace.BaseA);
+    NewFace.VertIdxB = GetOrCreateUniqueVertex(NewFace.BaseB);
+    NewFace.VertIdxC = GetOrCreateUniqueVertex(NewFace.BaseC);
     NewFace.Phase = Noise * Pi * 12.0f;
     NewFace.Seed = Noise;
     NewFace.TreeCount = 0;
+    NewFace.EcosystemLevel = 0;
     NewFace.Locked = false;
-    float PlateField =
-        ((float)sin(Center.X * 1.35f + Center.Z * 1.05f + 0.7f) +
-         (float)cos(Center.Y * 1.55f - Center.X * 1.20f) +
-         (float)sin((Center.X - Center.Y + Center.Z) * 1.10f - 0.4f)) /
-        3.0f;
+    float PlateField = GetGeographyNoise(Center);
     float RidgeField = (float)fabs(
         (float)sin(Center.X * 2.10f + Center.Y * 1.25f - Center.Z * 1.70f));
     float Score = PlateField + (Noise - 0.5f) * 0.10f;
-    if (Score > 0.30f && RidgeField > 0.80f) {
+    if (Score > 0.22f && RidgeField > 0.72f) {
       NewFace.Biome = BiomeMountain;
-      NewFace.Height = 0.06f + Noise * 0.035f;
-    } else if (Score > -0.08f) {
+      NewFace.Height = 0.22f + Noise * 0.07f;
+    } else if (Score > -0.06f) {
       NewFace.Biome = BiomeScorched;
-      NewFace.Height = 0.015f + Noise * 0.02f;
+      NewFace.Height = 0.04f + Noise * 0.03f;
     } else {
       NewFace.Biome = BiomeMagma;
-      NewFace.Height = -0.06f + Noise * 0.018f;
+      NewFace.Height = -0.24f + Noise * 0.02f;
     }
     Faces.push_back(NewFace);
     return;
@@ -291,6 +503,8 @@ void AddSubdividedFace(std::vector<Face> &Faces, Vector3 A, Vector3 B,
 }
 
 void GeneratePlanet() {
+  UniqueVertices.clear();
+  VertexHeights.clear();
   PlanetFaces.clear();
   float T = (1.0f + (float)sqrt(5.0f)) * 0.5f;
   Vector3 V[12];
@@ -315,7 +529,7 @@ void GeneratePlanet() {
   }
 }
 
-Vector3 WarpedVertex(Vector3 Base, Face &F) {
+Vector3 WarpedVertex(Vector3 Base, int VertIdx) {
   float Time = ElapsedSeconds;
   float Noise = VertexNoise(Base);
   float Phase = Noise * Pi * 12.0f;
@@ -327,14 +541,15 @@ Vector3 WarpedVertex(Vector3 Base, Face &F) {
   float Ridge =
       (float)sin(Base.X * 9.0f + Base.Y * 4.5f - Base.Z * 6.5f) * 0.026f;
   float Pulse = (float)sin(Time * 0.12f + Phase * 0.7f) * 0.008f;
-  float Radius = PlanetRadius + (Noise - 0.5f) * 0.15f + Ridge + Pulse;
+  float HeightOffset = (VertIdx >= 0 && VertIdx < (int)VertexHeights.size()) ? VertexHeights[VertIdx] : 0.0f;
+  float Radius = PlanetRadius + (Noise - 0.5f) * 0.15f + Ridge + Pulse + HeightOffset;
   return ScaleVector(Direction, Radius);
 }
 
 void UpdateFaceGeometry(Face &F) {
-  F.CurrentA = WarpedVertex(F.BaseA, F);
-  F.CurrentB = WarpedVertex(F.BaseB, F);
-  F.CurrentC = WarpedVertex(F.BaseC, F);
+  F.CurrentA = WarpedVertex(F.BaseA, F.VertIdxA);
+  F.CurrentB = WarpedVertex(F.BaseB, F.VertIdxB);
+  F.CurrentC = WarpedVertex(F.BaseC, F.VertIdxC);
   F.Center = ScaleVector(
       AddVector(AddVector(F.CurrentA, F.CurrentB), F.CurrentC), 1.0f / 3.0f);
   F.Normal =
@@ -346,6 +561,23 @@ void UpdateFaceGeometry(Face &F) {
 }
 
 void UpdateAllGeometry() {
+  if (UniqueVertices.empty()) return;
+  std::vector<float> AccumHeights(UniqueVertices.size(), 0.0f);
+  std::vector<int> ShareCount(UniqueVertices.size(), 0);
+  for (size_t I = 0; I < PlanetFaces.size(); I++) {
+    Face &F = PlanetFaces[I];
+    AccumHeights[F.VertIdxA] += F.Height;
+    ShareCount[F.VertIdxA]++;
+    AccumHeights[F.VertIdxB] += F.Height;
+    ShareCount[F.VertIdxB]++;
+    AccumHeights[F.VertIdxC] += F.Height;
+    ShareCount[F.VertIdxC]++;
+  }
+  for (size_t I = 0; I < UniqueVertices.size(); I++) {
+    if (ShareCount[I] > 0) {
+      VertexHeights[I] = AccumHeights[I] / (float)ShareCount[I];
+    }
+  }
   for (size_t I = 0; I < PlanetFaces.size(); I++) {
     UpdateFaceGeometry(PlanetFaces[I]);
   }
@@ -413,29 +645,38 @@ void BuildDisplayLists() {
   TreeList = glGenLists(1);
   glNewList(TreeList, GL_COMPILE);
   glPushMatrix();
-  SetMaterial(0.25f, 0.13f, 0.06f, false, false);
-  DrawBlock(0.075f, 0.28f, 0.075f);
-  glTranslatef(0.0f, 0.20f, 0.0f);
-  SetMaterial(0.15f, 0.21f, 0.09f, false, false);
-  DrawLowPolyCone(0.22f, 0.42f, 5);
-  glTranslatef(0.0f, 0.23f, 0.0f);
-  DrawLowPolyCone(0.17f, 0.35f, 5);
+  SetMaterial(0.22f, 0.11f, 0.05f, false, false);
+  DrawBlock(0.075f, 0.14f, 0.075f);
+  glTranslatef(0.0f, 0.12f, 0.0f);
+  SetMaterial(0.28f, 0.15f, 0.08f, false, false);
+  DrawBlock(0.060f, 0.16f, 0.060f);
+  glTranslatef(0.0f, 0.12f, 0.0f);
+  SetMaterial(0.11f, 0.18f, 0.07f, false, false);
+  DrawLowPolyCone(0.23f, 0.34f, 5);
+  glTranslatef(0.0f, 0.18f, 0.0f);
+  SetMaterial(0.16f, 0.26f, 0.09f, false, false);
+  DrawLowPolyCone(0.18f, 0.28f, 5);
+  glTranslatef(0.0f, 0.16f, 0.0f);
+  SetMaterial(0.22f, 0.38f, 0.12f, false, false);
+  DrawLowPolyCone(0.12f, 0.22f, 5);
   glPopMatrix();
   glEndList();
 
   CloudList = glGenLists(1);
   glNewList(CloudList, GL_COMPILE);
   glPushMatrix();
-  SetMaterial(0.87f, 0.88f, 0.86f, true, false);
+  SetMaterial(0.92f, 0.92f, 0.94f, true, false);
   glPushMatrix();
   glScalef(0.34f, 0.16f, 0.22f);
   glutSolidIcosahedron();
   glPopMatrix();
+  SetMaterial(0.86f, 0.86f, 0.89f, true, false);
   glPushMatrix();
   glTranslatef(0.24f, 0.03f, 0.05f);
   glScalef(0.24f, 0.13f, 0.16f);
   glutSolidIcosahedron();
   glPopMatrix();
+  SetMaterial(0.80f, 0.80f, 0.83f, true, false);
   glPushMatrix();
   glTranslatef(-0.23f, 0.02f, -0.02f);
   glScalef(0.22f, 0.12f, 0.17f);
@@ -456,17 +697,51 @@ void BuildDisplayLists() {
   MountainList = glGenLists(1);
   glNewList(MountainList, GL_COMPILE);
   glPushMatrix();
-  SetMaterial(0.38f, 0.39f, 0.45f, false, false);
+  SetMaterial(0.32f, 0.33f, 0.38f, false, false);
   DrawLowPolyCone(0.22f, 0.48f, 5);
   glPushMatrix();
   glTranslatef(0.18f, 0.0f, 0.08f);
   glScalef(0.72f, 0.78f, 0.72f);
+  SetMaterial(0.32f, 0.33f, 0.38f, false, false);
   DrawLowPolyCone(0.18f, 0.40f, 5);
   glPopMatrix();
   glPushMatrix();
   glTranslatef(-0.18f, 0.0f, -0.06f);
   glScalef(0.62f, 0.70f, 0.62f);
+  SetMaterial(0.32f, 0.33f, 0.38f, false, false);
   DrawLowPolyCone(0.16f, 0.34f, 5);
+  glPopMatrix();
+  glPopMatrix();
+  glEndList();
+
+  MountainSnowList = glGenLists(1);
+  glNewList(MountainSnowList, GL_COMPILE);
+  glPushMatrix();
+  glPushMatrix();
+  glTranslatef(0.0f, 0.318f, 0.0f);
+  glScalef(1.03f, 1.02f, 1.03f);
+  SetMaterial(0.92f, 0.94f, 0.96f, true, false);
+  DrawLowPolyCone(0.074f, 0.162f, 5);
+  glPopMatrix();
+  glPushMatrix();
+  glTranslatef(0.18f, 0.0f, 0.08f);
+  glScalef(0.72f, 0.78f, 0.72f);
+  glPushMatrix();
+  glTranslatef(0.0f, 0.258f, 0.0f);
+  glScalef(1.03f, 1.02f, 1.03f);
+  SetMaterial(0.92f, 0.94f, 0.96f, true, false);
+  DrawLowPolyCone(0.063f, 0.142f, 5);
+  glPopMatrix();
+  glPopMatrix();
+  glPushMatrix();
+  glTranslatef(-0.18f, 0.0f, -0.06f);
+  glScalef(0.62f, 0.70f, 0.62f);
+  glPushMatrix();
+  glTranslatef(0.0f, 0.218f, 0.0f);
+  glScalef(1.03f, 1.02f, 1.03f);
+  SetMaterial(0.92f, 0.94f, 0.96f, true, false);
+  DrawLowPolyCone(0.056f, 0.122f, 5);
+  glPopMatrix();
   glPopMatrix();
   glPopMatrix();
   glEndList();
@@ -474,16 +749,18 @@ void BuildDisplayLists() {
   IceClusterList = glGenLists(1);
   glNewList(IceClusterList, GL_COMPILE);
   glPushMatrix();
-  SetMaterial(0.94f, 0.98f, 0.93f, true, false);
+  SetMaterial(0.88f, 0.95f, 1.00f, true, false);
   DrawLowPolyCone(0.13f, 0.38f, 5);
   glPushMatrix();
   glTranslatef(0.13f, 0.0f, 0.08f);
   glScalef(0.70f, 0.82f, 0.70f);
+  SetMaterial(0.70f, 0.88f, 0.98f, true, false);
   DrawLowPolyCone(0.12f, 0.32f, 5);
   glPopMatrix();
   glPushMatrix();
   glTranslatef(-0.11f, 0.0f, -0.07f);
   glScalef(0.58f, 0.66f, 0.58f);
+  SetMaterial(0.60f, 0.82f, 0.96f, true, false);
   DrawLowPolyCone(0.11f, 0.29f, 5);
   glPopMatrix();
   glPopMatrix();
@@ -492,11 +769,26 @@ void BuildDisplayLists() {
   VolcanoList = glGenLists(1);
   glNewList(VolcanoList, GL_COMPILE);
   glPushMatrix();
-  SetMaterial(0.22f, 0.22f, 0.23f, false, false);
+  SetMaterial(0.18f, 0.18f, 0.19f, false, false);
   DrawLowPolyCone(0.20f, 0.34f, 6);
-  glTranslatef(0.0f, 0.08f, 0.0f);
-  SetMaterial(0.88f, 0.34f, 0.13f, false, true);
-  DrawLowPolyCone(0.07f, 0.09f, 5);
+  SetMaterial(0.95f, 0.35f, 0.05f, false, true);
+  glPushMatrix();
+  glRotatef(30.0f, 0.0f, 1.0f, 0.0f);
+  glTranslatef(0.08f, 0.05f, 0.08f);
+  glScalef(0.02f, 0.20f, 0.02f);
+  glutSolidCube(1.0);
+  glPopMatrix();
+  glPushMatrix();
+  glRotatef(150.0f, 0.0f, 1.0f, 0.0f);
+  glTranslatef(0.08f, 0.08f, -0.08f);
+  glScalef(0.02f, 0.16f, 0.02f);
+  glutSolidCube(1.0);
+  glPopMatrix();
+  glPushMatrix();
+  glTranslatef(0.0f, 0.22f, 0.0f);
+  SetMaterial(1.00f, 0.45f, 0.05f, false, true);
+  DrawLowPolyCone(0.08f, 0.13f, 5);
+  glPopMatrix();
   glPopMatrix();
   glEndList();
 
@@ -531,7 +823,7 @@ void DrawPlanet() {
   UpdateAllGeometry();
   for (size_t I = 0; I < PlanetFaces.size(); I++) {
     Face &F = PlanetFaces[I];
-    SetBiomeMaterial(F.Biome);
+    SetBiomeMaterial(F.Biome, (int)I, F.Center.Y, F.Height);
     glBegin(GL_TRIANGLES);
     glNormal3f(F.Normal.X, F.Normal.Y, F.Normal.Z);
     glVertex3f(F.CurrentA.X, F.CurrentA.Y, F.CurrentA.Z);
@@ -573,7 +865,7 @@ void DrawSurfaceObjects() {
                                    ScaleVector(Bitangent, (float)sin(A) * R));
         glPushMatrix();
         Vector3 P = AddVector(AddVector(F.Center, Offset),
-                              ScaleVector(F.Normal, 0.035f));
+                              ScaleVector(F.Normal, 0.001f));
         glTranslatef(P.X, P.Y, P.Z);
         AlignToNormal(F.Normal);
         glRotatef(F.Seed * 360.0f + (float)T * 47.0f, 0.0f, 1.0f, 0.0f);
@@ -585,18 +877,22 @@ void DrawSurfaceObjects() {
     }
     if (F.Biome == BiomeMountain && ShouldPlaceSurfaceAsset(F, 0.965f, 3.0f)) {
       glPushMatrix();
-      Vector3 P = AddVector(F.Center, ScaleVector(F.Normal, 0.028f));
+      Vector3 P = AddVector(F.Center, ScaleVector(F.Normal, 0.001f));
       glTranslatef(P.X, P.Y, P.Z);
       AlignToNormal(F.Normal);
       glRotatef(F.Seed * 360.0f, 0.0f, 1.0f, 0.0f);
       float S = 1.10f + F.Seed * 0.30f;
       glScalef(S, S, S);
       glCallList(MountainList);
+      float Progress = ElapsedSeconds / GameDuration;
+      if (Progress > 0.35f) {
+        glCallList(MountainSnowList);
+      }
       glPopMatrix();
     }
     if (F.Biome == BiomeIce && ShouldPlaceSurfaceAsset(F, 0.90f, 3.5f)) {
       glPushMatrix();
-      Vector3 P = AddVector(F.Center, ScaleVector(F.Normal, 0.03f));
+      Vector3 P = AddVector(F.Center, ScaleVector(F.Normal, 0.001f));
       glTranslatef(P.X, P.Y, P.Z);
       AlignToNormal(F.Normal);
       glRotatef(F.Seed * 300.0f, 0.0f, 1.0f, 0.0f);
@@ -608,12 +904,106 @@ void DrawSurfaceObjects() {
          F.Biome == BiomeMountain) &&
         ShouldPlaceSurfaceAsset(F, 0.975f, 2.6f)) {
       glPushMatrix();
-      Vector3 P = AddVector(F.Center, ScaleVector(F.Normal, 0.035f));
+      Vector3 P = AddVector(F.Center, ScaleVector(F.Normal, 0.001f));
       glTranslatef(P.X, P.Y, P.Z);
       AlignToNormal(F.Normal);
       float S = F.Biome == BiomeMagma ? 0.84f : 0.62f;
       glScalef(S, S, S);
       glCallList(VolcanoList);
+      glPopMatrix();
+    }
+
+    // Ecosystem rendering based on EcosystemLevel
+    if (F.EcosystemLevel >= 1) {
+      // Level 1: Microbial green algae patches (flat hex cells)
+      for (int PIdx = 0; PIdx < 3; PIdx++) {
+        float A = F.Seed * Pi * 10.0f + (float)PIdx * 2.09f;
+        float R = 0.04f + 0.02f * (float)PIdx;
+        Vector3 Offset = AddVector(ScaleVector(Tangent, (float)cos(A) * R),
+                                   ScaleVector(Bitangent, (float)sin(A) * R));
+        glPushMatrix();
+        Vector3 P = AddVector(AddVector(F.Center, Offset), ScaleVector(F.Normal, 0.003f));
+        glTranslatef(P.X, P.Y, P.Z);
+        AlignToNormal(F.Normal);
+        SetMaterial(0.20f + (float)PIdx * 0.05f, 0.68f - (float)PIdx * 0.05f, 0.38f, false, false);
+        glBegin(GL_POLYGON);
+        for (int S = 0; S < 6; S++) {
+          float Angle = (float)S / 6.0f * Pi * 2.0f;
+          glVertex3f((float)cos(Angle) * 0.022f, 0.0f, (float)sin(Angle) * 0.022f);
+        }
+        glEnd();
+        glPopMatrix();
+      }
+    }
+
+    if (F.EcosystemLevel >= 2) {
+      // Level 2: Wildlife/plants (tiny low-poly bushes/plants)
+      for (int PIdx = 0; PIdx < 2; PIdx++) {
+        float A = F.Seed * Pi * 12.0f + (float)PIdx * 3.14f + 1.0f;
+        float R = 0.05f + 0.01f * (float)PIdx;
+        Vector3 Offset = AddVector(ScaleVector(Tangent, (float)cos(A) * R),
+                                   ScaleVector(Bitangent, (float)sin(A) * R));
+        glPushMatrix();
+        Vector3 P = AddVector(AddVector(F.Center, Offset), ScaleVector(F.Normal, 0.001f));
+        glTranslatef(P.X, P.Y, P.Z);
+        AlignToNormal(F.Normal);
+        glRotatef(F.Seed * 180.0f + (float)PIdx * 45.0f, 0.0f, 1.0f, 0.0f);
+
+        // Brown stem
+        SetMaterial(0.32f, 0.22f, 0.12f, false, false);
+        DrawLowPolyCone(0.012f, 0.038f, 4);
+
+        // Green leaves cone
+        glTranslatef(0.0f, 0.03f, 0.0f);
+        SetMaterial(0.14f, 0.54f, 0.26f, false, false);
+        DrawLowPolyCone(0.032f, 0.048f, 4);
+        glPopMatrix();
+      }
+    }
+
+    if (F.EcosystemLevel >= 3) {
+      // Level 3: Primitive tribal camp huts and a glowing central campfire
+      for (int HIdx = 0; HIdx < 2; HIdx++) {
+        float A = F.Seed * Pi * 15.0f + (float)HIdx * 3.14f + 2.0f;
+        float R = 0.055f;
+        Vector3 Offset = AddVector(ScaleVector(Tangent, (float)cos(A) * R),
+                                   ScaleVector(Bitangent, (float)sin(A) * R));
+        glPushMatrix();
+        Vector3 P = AddVector(AddVector(F.Center, Offset), ScaleVector(F.Normal, 0.001f));
+        glTranslatef(P.X, P.Y, P.Z);
+        AlignToNormal(F.Normal);
+
+        // Hut base body (cylinder/cone)
+        SetMaterial(0.48f, 0.34f, 0.22f, false, false);
+        DrawLowPolyCone(0.026f, 0.032f, 5);
+
+        // Hut straw roof (yellow cone)
+        glTranslatef(0.0f, 0.026f, 0.0f);
+        SetMaterial(0.90f, 0.74f, 0.28f, false, false);
+        DrawLowPolyCone(0.030f, 0.022f, 5);
+        glPopMatrix();
+      }
+
+      // Campfire
+      glPushMatrix();
+      Vector3 P = AddVector(F.Center, ScaleVector(F.Normal, 0.001f));
+      glTranslatef(P.X, P.Y, P.Z);
+      AlignToNormal(F.Normal);
+
+      // Stone ring
+      SetMaterial(0.28f, 0.28f, 0.32f, false, false);
+      for (int S = 0; S < 5; S++) {
+        float Angle = (float)S / 5.0f * Pi * 2.0f;
+        glPushMatrix();
+        glTranslatef((float)cos(Angle) * 0.016f, 0.0f, (float)sin(Angle) * 0.016f);
+        DrawLowPolyCone(0.006f, 0.006f, 3);
+        glPopMatrix();
+      }
+
+      // Glowing fire flame (pulsing)
+      float FlamePulse = 1.0f + (float)sin(ElapsedSeconds * 12.0f) * 0.16f;
+      SetMaterial(1.0f, 0.54f, 0.08f, false, true); // Glow = true
+      DrawLowPolyCone(0.009f, 0.022f * FlamePulse, 4);
       glPopMatrix();
     }
   }
@@ -685,6 +1075,14 @@ void DrawText(float X, float Y, std::string Text, void *Font) {
   }
 }
 
+void DrawCenteredText(float CenterX, float Y, std::string Text, void *Font) {
+  int Width = glutBitmapLength(Font, (const unsigned char *)Text.c_str());
+  glRasterPos2f(CenterX - (float)Width * 0.5f, Y);
+  for (size_t I = 0; I < Text.length(); I++) {
+    glutBitmapCharacter(Font, Text[I]);
+  }
+}
+
 std::string FormatFloat(float Value, int Precision) {
   std::ostringstream Stream;
   Stream.setf(std::ios::fixed);
@@ -731,7 +1129,8 @@ void DrawOverlay() {
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-  glColor4f(0.04f, 0.05f, 0.07f, 0.72f);
+  // Left Sidebar background panel
+  glColor4f(0.04f, 0.05f, 0.08f, 0.88f);
   glBegin(GL_QUADS);
   glVertex2f(0.0f, 0.0f);
   glVertex2f(188.0f, 0.0f);
@@ -739,24 +1138,54 @@ void DrawOverlay() {
   glVertex2f(0.0f, (float)WindowHeight);
   glEnd();
 
-  glColor3f(1.0f, 1.0f, 1.0f);
+  // Left Sidebar vertical accent line
+  glColor4f(0.32f, 0.40f, 0.50f, 0.40f);
+  glLineWidth(2.0f);
+  glBegin(GL_LINES);
+  glVertex2f(188.0f, 0.0f);
+  glVertex2f(188.0f, (float)WindowHeight);
+  glEnd();
+  glLineWidth(1.0f);
+
+  glColor3f(0.92f, 0.86f, 0.40f);
   DrawText(18.0f, WindowHeight - 32.0f, "Epoch", GLUT_BITMAP_HELVETICA_18);
-  DrawText(18.0f, WindowHeight - 56.0f, "Tool: " + ToolName(SelectedTool),
-           GLUT_BITMAP_HELVETICA_12);
+  glColor3f(0.60f, 0.65f, 0.72f);
+  DrawText(18.0f, WindowHeight - 56.0f, "Selected God Tool:", GLUT_BITMAP_HELVETICA_10);
 
   for (int I = 0; I < 8; I++) {
     float Y = WindowHeight - 96.0f - (float)I * 48.0f;
-    if (SelectedTool == I) {
-      glColor3f(0.95f, 0.86f, 0.32f);
+    bool Selected = (SelectedTool == I);
+
+    if (Selected) {
+      float Pulse = (float)sin(ElapsedSeconds * 6.0f) * 0.15f + 0.75f;
+      glColor4f(0.92f, 0.76f, 0.20f, Pulse);
+      glBegin(GL_LINE_LOOP);
+      glVertex2f(14.0f, Y - 26.0f);
+      glVertex2f(172.0f, Y - 26.0f);
+      glVertex2f(172.0f, Y + 14.0f);
+      glVertex2f(14.0f, Y + 14.0f);
+      glEnd();
+
+      glColor4f(0.10f, 0.16f, 0.26f, 0.90f);
     } else {
-      glColor3f(0.30f, 0.33f, 0.39f);
+      glColor4f(0.18f, 0.20f, 0.24f, 0.40f);
+      glBegin(GL_LINE_LOOP);
+      glVertex2f(16.0f, Y - 24.0f);
+      glVertex2f(170.0f, Y - 24.0f);
+      glVertex2f(170.0f, Y + 12.0f);
+      glVertex2f(16.0f, Y + 12.0f);
+      glEnd();
+
+      glColor4f(0.06f, 0.08f, 0.10f, 0.55f);
     }
+
     glBegin(GL_QUADS);
     glVertex2f(16.0f, Y - 24.0f);
     glVertex2f(170.0f, Y - 24.0f);
     glVertex2f(170.0f, Y + 12.0f);
     glVertex2f(16.0f, Y + 12.0f);
     glEnd();
+
     if (I == ToolTree) {
       glColor3f(0.15f, 0.55f, 0.20f);
     } else if (I == ToolRain) {
@@ -772,7 +1201,7 @@ void DrawOverlay() {
     } else if (I == ToolMeteor) {
       glColor3f(0.70f, 0.48f, 0.32f);
     } else {
-      glColor3f(0.92f, 0.92f, 0.92f);
+      glColor3f(0.88f, 0.30f, 0.30f);
     }
     glBegin(GL_QUADS);
     glVertex2f(25.0f, Y - 15.0f);
@@ -780,11 +1209,121 @@ void DrawOverlay() {
     glVertex2f(47.0f, Y + 7.0f);
     glVertex2f(25.0f, Y + 7.0f);
     glEnd();
-    glColor3f(0.02f, 0.03f, 0.04f);
-    DrawText(31.0f, Y - 3.0f, FormatFloat((float)(I + 1), 0),
-             GLUT_BITMAP_HELVETICA_12);
+
+    glColor3f(0.90f, 0.90f, 0.90f);
+    glBegin(GL_LINE_LOOP);
+    glVertex2f(25.0f, Y - 15.0f);
+    glVertex2f(47.0f, Y - 15.0f);
+    glVertex2f(47.0f, Y + 7.0f);
+    glVertex2f(25.0f, Y + 7.0f);
+    glEnd();
+
     glColor3f(1.0f, 1.0f, 1.0f);
+    DrawText(33.0f, Y - 3.0f, FormatFloat((float)(I + 1), 0), GLUT_BITMAP_HELVETICA_10);
+
+    if (Selected) {
+      glColor3f(1.0f, 0.92f, 0.50f);
+    } else {
+      glColor3f(0.80f, 0.82f, 0.86f);
+    }
     DrawText(58.0f, Y - 2.0f, ToolName(I), GLUT_BITMAP_HELVETICA_12);
+  }
+
+  // Temperature Gauge
+  glColor3f(0.80f, 0.82f, 0.86f);
+  DrawText(18.0f, 235.0f, "Temperature", GLUT_BITMAP_HELVETICA_10);
+  glBegin(GL_QUADS);
+  glColor3f(0.15f, 0.40f, 0.85f);
+  glVertex2f(18.0f, 220.0f);
+  glColor3f(0.85f, 0.20f, 0.15f);
+  glVertex2f(170.0f, 220.0f);
+  glVertex2f(170.0f, 230.0f);
+  glColor3f(0.15f, 0.40f, 0.85f);
+  glVertex2f(18.0f, 230.0f);
+  glEnd();
+  glColor4f(0.30f, 0.35f, 0.40f, 0.60f);
+  glBegin(GL_LINE_LOOP);
+  glVertex2f(18.0f, 220.0f);
+  glVertex2f(170.0f, 220.0f);
+  glVertex2f(170.0f, 230.0f);
+  glVertex2f(18.0f, 230.0f);
+  glEnd();
+  glColor4f(1.0f, 1.0f, 1.0f, 0.60f);
+  glBegin(GL_LINES);
+  glVertex2f(94.0f, 218.0f);
+  glVertex2f(94.0f, 232.0f);
+  glEnd();
+  float TempMarkerX = 94.0f + TemperatureAxis * 76.0f;
+  TempMarkerX = ClampValue(TempMarkerX, 18.0f, 170.0f);
+  glColor3f(1.0f, 0.95f, 0.20f);
+  glBegin(GL_QUADS);
+  glVertex2f(TempMarkerX - 3.0f, 216.0f);
+  glVertex2f(TempMarkerX + 3.0f, 216.0f);
+  glVertex2f(TempMarkerX + 3.0f, 234.0f);
+  glVertex2f(TempMarkerX - 3.0f, 234.0f);
+  glEnd();
+
+  // Atmosphere Gauge
+  glColor3f(0.80f, 0.82f, 0.86f);
+  DrawText(18.0f, 175.0f, "Atmosphere", GLUT_BITMAP_HELVETICA_10);
+  glBegin(GL_QUADS);
+  glColor3f(0.20f, 0.22f, 0.25f);
+  glVertex2f(18.0f, 160.0f);
+  glColor3f(0.50f, 0.80f, 0.95f);
+  glVertex2f(170.0f, 160.0f);
+  glVertex2f(170.0f, 170.0f);
+  glColor3f(0.20f, 0.22f, 0.25f);
+  glVertex2f(18.0f, 170.0f);
+  glEnd();
+  glColor4f(0.30f, 0.35f, 0.40f, 0.60f);
+  glBegin(GL_LINE_LOOP);
+  glVertex2f(18.0f, 160.0f);
+  glVertex2f(170.0f, 160.0f);
+  glVertex2f(170.0f, 170.0f);
+  glVertex2f(18.0f, 170.0f);
+  glEnd();
+  glColor4f(1.0f, 1.0f, 1.0f, 0.60f);
+  glBegin(GL_LINES);
+  glVertex2f(94.0f, 158.0f);
+  glVertex2f(94.0f, 172.0f);
+  glEnd();
+  float AtmosMarkerX = 94.0f + AtmosphereAxis * 76.0f;
+  AtmosMarkerX = ClampValue(AtmosMarkerX, 18.0f, 170.0f);
+  glColor3f(1.0f, 0.95f, 0.20f);
+  glBegin(GL_QUADS);
+  glVertex2f(AtmosMarkerX - 3.0f, 158.0f);
+  glVertex2f(AtmosMarkerX + 3.0f, 158.0f);
+  glVertex2f(AtmosMarkerX + 3.0f, 172.0f);
+  glVertex2f(AtmosMarkerX - 3.0f, 172.0f);
+  glEnd();
+
+  int TotalCamps = 0;
+  int TotalWildlife = 0;
+  int TotalMicrobes = 0;
+  for (size_t I = 0; I < PlanetFaces.size(); I++) {
+    if (PlanetFaces[I].EcosystemLevel == 3) {
+      TotalCamps++;
+    } else if (PlanetFaces[I].EcosystemLevel == 2) {
+      TotalWildlife++;
+    } else if (PlanetFaces[I].EcosystemLevel == 1) {
+      TotalMicrobes++;
+    }
+  }
+
+  glColor3f(0.60f, 0.65f, 0.72f);
+  DrawText(18.0f, 134.0f, "Ecosystem Status:", GLUT_BITMAP_HELVETICA_10);
+  if (TotalCamps > 0) {
+    glColor3f(0.30f, 0.85f, 0.40f);
+    DrawText(18.0f, 116.0f, "Tribal Camps: " + FormatFloat((float)TotalCamps, 0), GLUT_BITMAP_HELVETICA_12);
+  } else if (TotalWildlife > 0) {
+    glColor3f(0.35f, 0.75f, 0.90f);
+    DrawText(18.0f, 116.0f, "Wildlife Roaming", GLUT_BITMAP_HELVETICA_12);
+  } else if (TotalMicrobes > 0) {
+    glColor3f(0.55f, 0.85f, 0.60f);
+    DrawText(18.0f, 116.0f, "Microbial Algae", GLUT_BITMAP_HELVETICA_12);
+  } else {
+    glColor3f(0.85f, 0.35f, 0.35f);
+    DrawText(18.0f, 116.0f, "Sterile / Dead", GLUT_BITMAP_HELVETICA_12);
   }
 
   float Remaining = std::max(0.0f, GameDuration - ElapsedSeconds);
@@ -798,21 +1337,77 @@ void DrawOverlay() {
   DrawText(18.0f, 18.0f, "Click planet | P pause | R reset",
            GLUT_BITMAP_HELVETICA_10);
 
+  // Radar Indicator HUD
   float Cx = (float)WindowWidth - 118.0f;
   float Cy = 130.0f;
   glPushMatrix();
   glTranslatef(Cx, Cy, 0.0f);
-  glColor3f(0.55f, 0.95f, 0.62f);
-  glCallList(UiCircleList);
-  glColor3f(0.90f, 0.18f, 0.16f);
+
+  // Glass backing circle
+  glColor4f(0.04f, 0.05f, 0.08f, 0.76f);
+  glBegin(GL_POLYGON);
+  for (int I = 0; I < 64; I++) {
+    float A = (float)I / 64.0f * Pi * 2.0f;
+    glVertex2f((float)cos(A) * 86.0f, (float)sin(A) * 86.0f);
+  }
+  glEnd();
+
+  // Glass border accent
+  glColor4f(0.32f, 0.40f, 0.50f, 0.40f);
+  glBegin(GL_LINE_LOOP);
+  for (int I = 0; I < 64; I++) {
+    float A = (float)I / 64.0f * Pi * 2.0f;
+    glVertex2f((float)cos(A) * 86.0f, (float)sin(A) * 86.0f);
+  }
+  glEnd();
+
+  // Concentric color loops
+  for (int R = 0; R < 3; R++) {
+    float Radius = 25.0f + (float)R * 25.0f;
+    if (R == 0) glColor4f(0.20f, 0.85f, 0.35f, 0.65f);      // Inner/Safe (Green)
+    else if (R == 1) glColor4f(0.92f, 0.64f, 0.18f, 0.65f); // Mid/Warning (Yellow)
+    else glColor4f(0.90f, 0.22f, 0.16f, 0.65f);             // Outer/Danger (Red)
+
+    glBegin(GL_LINE_LOOP);
+    for (int I = 0; I < 96; I++) {
+      float A = (float)I / 96.0f * Pi * 2.0f;
+      glVertex2f((float)cos(A) * Radius, (float)sin(A) * Radius);
+    }
+    glEnd();
+  }
+
+  // Crosshairs
+  glColor4f(0.32f, 0.40f, 0.50f, 0.25f);
+  glBegin(GL_LINES);
+  glVertex2f(-82.0f, 0.0f);
+  glVertex2f(82.0f, 0.0f);
+  glVertex2f(0.0f, -82.0f);
+  glVertex2f(0.0f, 82.0f);
+  glEnd();
+
+  // Indicator Dot
   float DotX = ClampValue(TemperatureAxis, -1.0f, 1.0f) * 75.0f;
   float DotY = ClampValue(AtmosphereAxis, -1.0f, 1.0f) * 75.0f;
+
+  // Pulsing halo glow
+  float PulsingHaloRadius = 12.0f + (float)sin(ElapsedSeconds * 8.0f) * 3.0f;
+  glColor4f(0.90f, 0.18f, 0.16f, 0.24f);
   glBegin(GL_POLYGON);
   for (int I = 0; I < 32; I++) {
     float A = (float)I / 32.0f * Pi * 2.0f;
-    glVertex2f(DotX + (float)cos(A) * 7.0f, DotY + (float)sin(A) * 7.0f);
+    glVertex2f(DotX + (float)cos(A) * PulsingHaloRadius, DotY + (float)sin(A) * PulsingHaloRadius);
   }
   glEnd();
+
+  // Solid dot core
+  glColor3f(1.0f, 0.25f, 0.20f);
+  glBegin(GL_POLYGON);
+  for (int I = 0; I < 32; I++) {
+    float A = (float)I / 32.0f * Pi * 2.0f;
+    glVertex2f(DotX + (float)cos(A) * 6.0f, DotY + (float)sin(A) * 6.0f);
+  }
+  glEnd();
+
   glColor3f(1.0f, 1.0f, 1.0f);
   DrawText(-50.0f, 92.0f, "High Atmosphere", GLUT_BITMAP_HELVETICA_10);
   DrawText(-48.0f, -104.0f, "Low Atmosphere", GLUT_BITMAP_HELVETICA_10);
@@ -825,14 +1420,14 @@ void DrawOverlay() {
     std::string Name = DisasterKind == DisasterMeteor
                            ? "GIANT METEOR INCOMING"
                            : "GLOBAL ICE AGE FORMING";
-    DrawText((float)WindowWidth * 0.5f - 128.0f, (float)WindowHeight - 76.0f,
-             "ALERT: " + Name, GLUT_BITMAP_HELVETICA_18);
-    DrawText((float)WindowWidth * 0.5f - 88.0f, (float)WindowHeight - 102.0f,
-             "Stabilize balance quickly", GLUT_BITMAP_HELVETICA_12);
+    DrawCenteredText((float)WindowWidth * 0.5f, (float)WindowHeight - 76.0f,
+                     "ALERT: " + Name, GLUT_BITMAP_HELVETICA_18);
+    DrawCenteredText((float)WindowWidth * 0.5f, (float)WindowHeight - 102.0f,
+                     "Stabilize balance quickly", GLUT_BITMAP_HELVETICA_12);
   } else if (AlertSeconds > 0.0f) {
     glColor3f(1.0f, 0.80f, 0.18f);
-    DrawText((float)WindowWidth * 0.5f - 92.0f, (float)WindowHeight - 76.0f,
-             "EXTREME EVENT IMPACT", GLUT_BITMAP_HELVETICA_18);
+    DrawCenteredText((float)WindowWidth * 0.5f, (float)WindowHeight - 76.0f,
+                     "EXTREME EVENT IMPACT", GLUT_BITMAP_HELVETICA_18);
   }
 
   if (GameOver) {
@@ -848,14 +1443,12 @@ void DrawOverlay() {
     std::string Body = GameWon
                            ? "You guided 5 billion years of survival."
                            : "The final balance was outside the middle ring.";
-    DrawText((float)WindowWidth * 0.5f - 86.0f,
-             (float)WindowHeight * 0.5f + 24.0f, Title,
-             GLUT_BITMAP_HELVETICA_18);
-    DrawText((float)WindowWidth * 0.5f - 142.0f,
-             (float)WindowHeight * 0.5f - 6.0f, Body, GLUT_BITMAP_HELVETICA_12);
-    DrawText((float)WindowWidth * 0.5f - 64.0f,
-             (float)WindowHeight * 0.5f - 34.0f, "Press R to restart",
-             GLUT_BITMAP_HELVETICA_12);
+    DrawCenteredText((float)WindowWidth * 0.5f, (float)WindowHeight * 0.5f + 24.0f,
+                     Title, GLUT_BITMAP_HELVETICA_18);
+    DrawCenteredText((float)WindowWidth * 0.5f, (float)WindowHeight * 0.5f - 6.0f,
+                     Body, GLUT_BITMAP_HELVETICA_12);
+    DrawCenteredText((float)WindowWidth * 0.5f, (float)WindowHeight * 0.5f - 34.0f,
+                     "Press R to restart", GLUT_BITMAP_HELVETICA_12);
   }
 
   glEnable(GL_DEPTH_TEST);
@@ -876,6 +1469,103 @@ void ApplyCamera() {
   gluLookAt(X, Y, Z, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f);
 }
 
+void DrawAtmosphereRing() {
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glDepthMask(GL_FALSE);
+  glDisable(GL_LIGHTING);
+
+  float Red = 0.15f;
+  float Green = 0.65f;
+  float Blue = 0.95f;
+
+  if (TemperatureAxis > 0.35f) {
+    float Factor = ClampValue((TemperatureAxis - 0.35f) / 0.65f, 0.0f, 1.0f);
+    Red = 0.15f * (1.0f - Factor) + 0.90f * Factor;
+    Green = 0.65f * (1.0f - Factor) + 0.35f * Factor;
+    Blue = 0.95f * (1.0f - Factor) + 0.08f * Factor;
+  } else if (TemperatureAxis < -0.35f) {
+    float Factor = ClampValue((-TemperatureAxis - 0.35f) / 0.65f, 0.0f, 1.0f);
+    Red = 0.15f * (1.0f - Factor) + 0.85f * Factor;
+    Green = 0.65f * (1.0f - Factor) + 0.92f * Factor;
+    Blue = 0.95f * (1.0f - Factor) + 1.00f * Factor;
+  }
+
+  float NormAtmos = (AtmosphereAxis + 1.15f) / 2.3f;
+  float Alpha = 0.015f + NormAtmos * 0.065f;
+
+  glColor4f(Red, Green, Blue, Alpha);
+  glutSolidSphere(PlanetRadius + 0.09f, 32, 32);
+
+  glEnable(GL_LIGHTING);
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
+}
+
+void DrawHolographicRing() {
+  if (HoveredFace < 0 || HoveredFace >= (int)PlanetFaces.size() || GameOver) {
+    return;
+  }
+  Face &F = PlanetFaces[HoveredFace];
+  float RVal = 0.06f;
+  if (SelectedTool == ToolRain) RVal = 0.23f;
+  else if (SelectedTool == ToolIce) RVal = 0.23f;
+  else if (SelectedTool == ToolFire) RVal = 0.24f;
+  else if (SelectedTool == ToolMountain) RVal = 0.19f;
+  else if (SelectedTool == ToolWater) RVal = 0.21f;
+  else if (SelectedTool == ToolMeteor) RVal = 0.34f;
+
+  float PhysRadius = RVal * PlanetRadius;
+
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glDepthMask(GL_FALSE);
+  glDisable(GL_LIGHTING);
+  glLineWidth(3.0f);
+
+  if (SelectedTool == ToolTree) glColor4f(0.15f, 0.85f, 0.20f, 0.70f);
+  else if (SelectedTool == ToolRain) glColor4f(0.25f, 0.50f, 1.0f, 0.70f);
+  else if (SelectedTool == ToolIce) glColor4f(0.82f, 0.96f, 1.0f, 0.70f);
+  else if (SelectedTool == ToolFire) glColor4f(1.0f, 0.35f, 0.08f, 0.70f);
+  else if (SelectedTool == ToolMountain) glColor4f(0.85f, 0.75f, 0.40f, 0.70f);
+  else if (SelectedTool == ToolWater) glColor4f(0.15f, 0.43f, 0.88f, 0.70f);
+  else if (SelectedTool == ToolMeteor) glColor4f(0.95f, 0.22f, 0.06f, 0.70f);
+  else glColor4f(0.88f, 0.30f, 0.30f, 0.70f);
+
+  glPushMatrix();
+  Vector3 P = AddVector(F.Center, ScaleVector(F.Normal, 0.024f));
+  glTranslatef(P.X, P.Y, P.Z);
+  AlignToNormal(F.Normal);
+
+  glBegin(GL_LINE_LOOP);
+  for (int I = 0; I < 64; I++) {
+    float Angle = (float)I / 64.0f * Pi * 2.0f;
+    glVertex3f((float)cos(Angle) * PhysRadius, 0.0f, (float)sin(Angle) * PhysRadius);
+  }
+  glEnd();
+
+  if (SelectedTool == ToolTree) glColor4f(0.15f, 0.85f, 0.20f, 0.12f);
+  else if (SelectedTool == ToolRain) glColor4f(0.25f, 0.50f, 1.0f, 0.12f);
+  else if (SelectedTool == ToolIce) glColor4f(0.82f, 0.96f, 1.0f, 0.12f);
+  else if (SelectedTool == ToolFire) glColor4f(1.0f, 0.35f, 0.08f, 0.12f);
+  else if (SelectedTool == ToolMountain) glColor4f(0.85f, 0.75f, 0.40f, 0.12f);
+  else if (SelectedTool == ToolWater) glColor4f(0.15f, 0.43f, 0.88f, 0.12f);
+  else if (SelectedTool == ToolMeteor) glColor4f(0.95f, 0.22f, 0.06f, 0.12f);
+  else glColor4f(0.88f, 0.30f, 0.30f, 0.12f);
+
+  glBegin(GL_POLYGON);
+  for (int I = 0; I < 64; I++) {
+    float Angle = (float)I / 64.0f * Pi * 2.0f;
+    glVertex3f((float)cos(Angle) * PhysRadius, 0.0f, (float)sin(Angle) * PhysRadius);
+  }
+  glEnd();
+
+  glPopMatrix();
+  glEnable(GL_LIGHTING);
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
+}
+
 void Display() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   glMatrixMode(GL_PROJECTION);
@@ -887,7 +1577,8 @@ void Display() {
   glGetDoublev(GL_MODELVIEW_MATRIX, PickModelMatrix);
   glGetDoublev(GL_PROJECTION_MATRIX, PickProjectionMatrix);
   glGetIntegerv(GL_VIEWPORT, PickViewport);
-  GLfloat LightPosition[4] = {5.5f, 6.0f, 4.5f, 0.0f};
+  float SunAngle = ElapsedSeconds * (Pi * 2.0f / 120.0f);
+  GLfloat LightPosition[4] = {7.0f * (float)cos(SunAngle), 3.5f, 7.0f * (float)sin(SunAngle), 0.0f};
   GLfloat LightSpecular[4] = {0.50f, 0.50f, 0.46f, 1.0f};
   GLfloat LightDiffuse[4] = {0.72f, 0.70f, 0.66f, 1.0f};
   GLfloat FillPosition[4] = {-4.0f, 3.0f, -5.5f, 0.0f};
@@ -902,6 +1593,8 @@ void Display() {
   DrawClouds();
   DrawPlanet();
   DrawSurfaceObjects();
+  DrawHolographicRing();
+  DrawAtmosphereRing();
   DrawParticles();
   DrawMeteors();
   DrawOverlay();
@@ -1013,7 +1706,7 @@ void AffectNeighbors(int FaceIndex, float Radius, int Biome, int TreeChange,
     if (D < Radius) {
       PlanetFaces[I].Biome = Biome;
       PlanetFaces[I].Height += HeightChange * (1.0f - D / Radius);
-      PlanetFaces[I].Height = ClampValue(PlanetFaces[I].Height, -0.20f, 0.26f);
+      PlanetFaces[I].Height = ClampValue(PlanetFaces[I].Height, -0.35f, 0.45f);
       if (TreeChange > 0) {
         PlanetFaces[I].TreeCount =
             std::min(4, PlanetFaces[I].TreeCount + TreeChange);
@@ -1032,10 +1725,11 @@ void MeteorImpact(int FaceIndex, bool PlayerMade) {
     return;
   }
   AffectNeighbors(FaceIndex, PlayerMade ? 0.34f : 0.50f, BiomeScorched, -1,
-                  -0.06f, true);
+                  -0.08f, true);
   PlanetFaces[FaceIndex].Biome = BiomeMagma;
-  PlanetFaces[FaceIndex].Height -= 0.09f;
+  PlanetFaces[FaceIndex].Height -= 0.12f;
   SpawnParticlesOnFace(FaceIndex, 2, 38);
+  PlaySfx(2); // Play Bass Boom SFX!
   HeatPressure += PlayerMade ? 0.50f : 0.38f;
   AlertSeconds = 5.5f;
 }
@@ -1070,32 +1764,41 @@ void ApplyTool(int FaceIndex) {
     F.TreeCount = std::min(3, F.TreeCount + 1);
     F.Locked = true;
     AtmospherePressure += 0.12f;
+    PlaySfx(1); // Blip
   } else if (SelectedTool == ToolRain) {
     AffectNeighbors(FaceIndex, 0.23f, BiomeLand, 0, 0.01f, true);
     SpawnParticlesOnFace(FaceIndex, 0, 48);
     HeatPressure -= 0.10f;
+    PlaySfx(3); // Splash
   } else if (SelectedTool == ToolIce) {
     AffectNeighbors(FaceIndex, 0.23f, BiomeIce, 0, 0.02f, true);
     SpawnParticlesOnFace(FaceIndex, 1, 50);
     HeatPressure -= 0.20f;
+    PlaySfx(1); // Blip
   } else if (SelectedTool == ToolFire) {
     AffectNeighbors(FaceIndex, 0.24f, BiomeScorched, -1, -0.01f, true);
     SpawnParticlesOnFace(FaceIndex, 2, 28);
     HeatPressure += 0.10f;
+    PlaySfx(2); // Sizzle Boom
   } else if (SelectedTool == ToolMountain) {
     AffectNeighbors(FaceIndex, 0.19f, BiomeMountain, 0, 0.075f, true);
+    PlaySfx(2); // Boom
   } else if (SelectedTool == ToolWater) {
     AffectNeighbors(FaceIndex, 0.21f, BiomeOcean, -1, -0.055f, true);
     SpawnParticlesOnFace(FaceIndex, 0, 28);
+    PlaySfx(3); // Splash
   } else if (SelectedTool == ToolMeteor) {
     SpawnMeteorToFace(FaceIndex, true);
+    PlaySfx(1); // Blip on spawn
   } else if (SelectedTool == ToolRemove) {
     F.TreeCount = 0;
+    F.EcosystemLevel = 0;
     if (F.Biome == BiomeForest) {
       F.Biome = BiomeLand;
     }
     F.Locked = true;
     AtmospherePressure -= 0.12f;
+    PlaySfx(1); // Blip
   }
   HeatPressure = ClampValue(HeatPressure, -1.1f, 1.1f);
   AtmospherePressure = ClampValue(AtmospherePressure, -1.1f, 1.1f);
@@ -1210,6 +1913,46 @@ void UpdateEvolution(float Delta) {
         ApplyMatureBiome(F, Target);
       }
     }
+
+    // Ecosystem Evolution
+    if (F.Biome == BiomeMagma || F.Biome == BiomeScorched || F.Biome == BiomeIce) {
+      F.EcosystemLevel = 0;
+    } else {
+      float BalanceDistance = (float)sqrt(TemperatureAxis * TemperatureAxis +
+                                          AtmosphereAxis * AtmosphereAxis);
+      bool SafeZone = (BalanceDistance <= SafeBalanceRadius);
+
+      if (SafeZone) {
+        // Safe balance: slow random ecosystem growth (reduced rate for less crowding)
+        float GrowChance = 0.005f * Delta;
+        if (RandomUnit() < GrowChance) {
+          if (F.EcosystemLevel == 0 && Progress >= 0.15f) {
+            // Level 1: Microbes (Ocean, Land, Forest) - Starts at 0.75B years
+            if (F.Biome == BiomeOcean || F.Biome == BiomeLand || F.Biome == BiomeForest) {
+              F.EcosystemLevel = 1;
+            }
+          } else if (F.EcosystemLevel == 1 && Progress >= 0.40f) {
+            // Level 2: Wildlife (Land, Forest) - Starts at 2.0B years
+            if (F.Biome == BiomeLand || F.Biome == BiomeForest) {
+              F.EcosystemLevel = 2;
+            }
+          } else if (F.EcosystemLevel == 2 && Progress >= 0.70f) {
+            // Level 3: Primitive tribal camps - Starts at 3.5B years (Progress >= 0.70)
+            if (F.Biome == BiomeForest || (F.Biome == BiomeLand && F.TreeCount > 0)) {
+              F.EcosystemLevel = 3;
+            }
+          }
+        }
+      } else {
+        // Unsafe balance: decay ecosystem over time
+        float DecayChance = 0.12f * Delta;
+        if (RandomUnit() < DecayChance) {
+          if (F.EcosystemLevel > 0) {
+            F.EcosystemLevel--;
+          }
+        }
+      }
+    }
   }
 }
 
@@ -1220,8 +1963,18 @@ void UpdateObjects(float Delta) {
   }
   TreePulse = 1.0f + (float)sin(ElapsedSeconds * 0.12f) * 0.003f;
   for (size_t I = 0; I < Particles.size(); I++) {
+    Vector3 Vel = Particles[I].Velocity;
+    if (Particles[I].Kind == 1) {
+      // Snow sway
+      Vel.X += (float)sin(ElapsedSeconds * 4.0f + Particles[I].Life * 8.0f) * 0.12f;
+      Vel.Z += (float)cos(ElapsedSeconds * 4.0f + Particles[I].Life * 8.0f) * 0.12f;
+    } else if (Particles[I].Kind == 2) {
+      // Heat/smoke dispersion
+      Vel.X += (float)sin(Particles[I].Life * 12.0f) * 0.08f;
+      Vel.Z += (float)cos(Particles[I].Life * 12.0f) * 0.08f;
+    }
     Particles[I].Position = AddVector(
-        Particles[I].Position, ScaleVector(Particles[I].Velocity, Delta));
+        Particles[I].Position, ScaleVector(Vel, Delta));
     Particles[I].Life -= Delta;
   }
   std::vector<Particle> AliveParticles;
@@ -1257,6 +2010,34 @@ void CheckWinLose() {
   }
 }
 
+void UpdateAudio() {
+  if (GamePaused || GameOver) {
+    SoundSystem::TargetVolume = 0.0f;
+    return;
+  }
+  float BalanceDistance = (float)sqrt(TemperatureAxis * TemperatureAxis +
+                                      AtmosphereAxis * AtmosphereAxis);
+  bool SafeZone = (BalanceDistance <= SafeBalanceRadius);
+  if (TemperatureAxis > 0.40f) {
+    SoundSystem::Waveform = 2; // Noise
+    SoundSystem::TargetFrequency = 60.0f + TemperatureAxis * 40.0f;
+    SoundSystem::TargetVolume = 0.16f;
+  } else if (TemperatureAxis < -0.40f) {
+    SoundSystem::Waveform = 1; // Triangle
+    SoundSystem::TargetFrequency = 800.0f - TemperatureAxis * 300.0f;
+    SoundSystem::TargetVolume = 0.08f;
+  } else {
+    SoundSystem::Waveform = 0; // Sine
+    if (SafeZone) {
+      SoundSystem::TargetFrequency = 220.0f + (float)sin(ElapsedSeconds * 0.4f) * 20.0f;
+      SoundSystem::TargetVolume = 0.12f;
+    } else {
+      SoundSystem::TargetFrequency = 290.0f + (float)sin(ElapsedSeconds * 2.0f) * 30.0f;
+      SoundSystem::TargetVolume = 0.10f;
+    }
+  }
+}
+
 void Timer(int Value) {
   float Now = (float)glutGet(GLUT_ELAPSED_TIME) / 1000.0f;
   float Delta = Now - LastTickSeconds;
@@ -1278,6 +2059,10 @@ void Timer(int Value) {
       }
     }
     CheckWinLose();
+    UpdateAudio();
+  } else {
+    // Make sure volume goes down when paused
+    SoundSystem::TargetVolume = 0.0f;
   }
   if (AlertSeconds > 0.0f) {
     AlertSeconds -= Delta;
@@ -1363,6 +2148,14 @@ void Motion(int X, int Y) {
   }
 }
 
+void PassiveMotion(int X, int Y) {
+  if (X <= 186) {
+    HoveredFace = -1;
+  } else {
+    HoveredFace = PickFace(X, Y);
+  }
+}
+
 void Reshape(int Width, int Height) {
   WindowWidth = Width > 1 ? Width : 1;
   WindowHeight = Height > 1 ? Height : 1;
@@ -1383,6 +2176,7 @@ void InitOpenGl() {
   glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, GL_TRUE);
   BuildDisplayLists();
   ResetGame();
+  SoundSystem::Start();
 }
 
 int main(int ArgCount, char **ArgValues) {
@@ -1397,7 +2191,9 @@ int main(int ArgCount, char **ArgValues) {
   glutKeyboardFunc(Keyboard);
   glutMouseFunc(Mouse);
   glutMotionFunc(Motion);
+  glutPassiveMotionFunc(PassiveMotion);
   glutTimerFunc(16, Timer, 0);
   glutMainLoop();
+  SoundSystem::Stop();
   return 0;
 }
