@@ -4,14 +4,14 @@ Name=Epoch
 Type=0
 Ver=2
 ObjFiles=
-Includes=
+Includes="C:\Users\SYAIR\Documents\PRAKTIKUM AJG!\Praktikum GTI\Epoch\include"
 Libs=
 PrivateResource=
 ResourceIncludes=
 MakeIncludes=
-Compiler=-DGLUT_STATIC -std=c++11
-CppCompiler=-std=c++11
-Linker=-lglut32 -lglu32 -lopengl32 -lwinmm -lgdi32
+Compiler=-DGLUT_STATIC -std=c++11_@@_
+CppCompiler=-std=c++11_@@_
+Linker=-lglut32 -lglu32 -lopengl32 -lwinmm -lgdi32_@@_
 IsCpp=1
 Icon=
 ExeOutput=
@@ -19,7 +19,7 @@ ObjectOutput=
 LogOutput=
 LogOutputEnabled=0
 OverrideOutput=0
-OverrideOutputName=
+OverrideOutputName=Epoch.exe
 HostApplication=
 UseCustomMakefile=0
 CustomMakefile=
@@ -39,19 +39,19 @@ Build=0
 LanguageID=1033
 CharsetID=1252
 CompanyName=
-FileVersion=
+FileVersion=1.0.0.0
 FileDescription=Developed using the Dev-C++ IDE
 InternalName=
 LegalCopyright=
 LegalTrademarks=
 OriginalFilename=
 ProductName=
-ProductVersion=
+ProductVersion=1.0.0.0
 AutoIncBuildNr=0
 SyncProduct=1
 
 [Unit1]
-FileName=main.cpp
+FileName=include\GameConfig.h
 CompileCpp=1
 Folder=Epoch
 Compile=1
@@ -61,7 +61,7 @@ OverrideBuildCmd=0
 BuildCmd=
 
 [Unit2]
-FileName=GameConfig.h
+FileName=include\GameGlobals.h
 CompileCpp=1
 Folder=Epoch
 Compile=1
@@ -71,7 +71,7 @@ OverrideBuildCmd=0
 BuildCmd=
 
 [Unit3]
-FileName=GameTypes.h
+FileName=include\GameTypes.h
 CompileCpp=1
 Folder=Epoch
 Compile=1
@@ -81,7 +81,7 @@ OverrideBuildCmd=0
 BuildCmd=
 
 [Unit4]
-FileName=MathUtils.h
+FileName=include\MathUtils.h
 CompileCpp=1
 Folder=Epoch
 Compile=1
@@ -91,7 +91,7 @@ OverrideBuildCmd=0
 BuildCmd=
 
 [Unit5]
-FileName=MathUtils.cpp
+FileName=include\Planet.h
 CompileCpp=1
 Folder=Epoch
 Compile=1
@@ -101,7 +101,7 @@ OverrideBuildCmd=0
 BuildCmd=
 
 [Unit6]
-FileName=GameGlobals.h
+FileName=include\Renderer.h
 CompileCpp=1
 Folder=Epoch
 Compile=1
@@ -111,7 +111,7 @@ OverrideBuildCmd=0
 BuildCmd=
 
 [Unit7]
-FileName=GameGlobals.cpp
+FileName=include\SoundSystem.h
 CompileCpp=1
 Folder=Epoch
 Compile=1
@@ -121,7 +121,7 @@ OverrideBuildCmd=0
 BuildCmd=
 
 [Unit8]
-FileName=SoundSystem.h
+FileName=src\GameGlobals.cpp
 CompileCpp=1
 Folder=Epoch
 Compile=1
@@ -131,7 +131,7 @@ OverrideBuildCmd=0
 BuildCmd=
 
 [Unit9]
-FileName=SoundSystem.cpp
+FileName=src\main.cpp
 CompileCpp=1
 Folder=Epoch
 Compile=1
@@ -141,7 +141,7 @@ OverrideBuildCmd=0
 BuildCmd=
 
 [Unit10]
-FileName=Planet.h
+FileName=src\MathUtils.cpp
 CompileCpp=1
 Folder=Epoch
 Compile=1
@@ -151,7 +151,7 @@ OverrideBuildCmd=0
 BuildCmd=
 
 [Unit11]
-FileName=Planet.cpp
+FileName=src\Planet.cpp
 CompileCpp=1
 Folder=Epoch
 Compile=1
@@ -161,7 +161,7 @@ OverrideBuildCmd=0
 BuildCmd=
 
 [Unit12]
-FileName=Renderer.h
+FileName=src\Renderer.cpp
 CompileCpp=1
 Folder=Epoch
 Compile=1
@@ -171,7 +171,7 @@ OverrideBuildCmd=0
 BuildCmd=
 
 [Unit13]
-FileName=Renderer.cpp
+FileName=src\SoundSystem.cpp
 CompileCpp=1
 Folder=Epoch
 Compile=1

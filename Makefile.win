@@ -4,11 +4,11 @@
 CPP      = g++.exe
 CC       = gcc.exe
 WINDRES  = windres.exe
-OBJ      = main.o MathUtils.o GameGlobals.o SoundSystem.o Planet.o Renderer.o
-LINKOBJ  = main.o MathUtils.o GameGlobals.o SoundSystem.o Planet.o Renderer.o
+OBJ      = src/GameGlobals.o src/main.o src/MathUtils.o src/Planet.o src/Renderer.o src/SoundSystem.o
+LINKOBJ  = src/GameGlobals.o src/main.o src/MathUtils.o src/Planet.o src/Renderer.o src/SoundSystem.o
 LIBS     = -L"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib" -L"C:/Program Files (x86)/Dev-Cpp/MinGW32/mingw32/lib" -static-libstdc++ -static-libgcc -mwindows -lglut32 -lglu32 -lopengl32 -lwinmm -lgdi32
-INCS     = -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/mingw32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib/gcc/mingw32/4.8.1/include"
-CXXINCS  = -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/mingw32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib/gcc/mingw32/4.8.1/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib/gcc/mingw32/4.8.1/include/c++"
+INCS     = -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/mingw32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib/gcc/mingw32/4.8.1/include" -I"C:/Users/SYAIR/Documents/PRAKTIKUM AJG!/Praktikum GTI/Epoch/include"
+CXXINCS  = -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/mingw32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib/gcc/mingw32/4.8.1/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib/gcc/mingw32/4.8.1/include/c++" -I"C:/Users/SYAIR/Documents/PRAKTIKUM AJG!/Praktikum GTI/Epoch/include"
 BIN      = Epoch.exe
 CXXFLAGS = $(CXXINCS) -std=c++11
 CFLAGS   = $(INCS) -DGLUT_STATIC -std=c++11
@@ -24,20 +24,20 @@ clean: clean-custom
 $(BIN): $(OBJ)
 	$(CPP) $(LINKOBJ) -o $(BIN) $(LIBS)
 
-main.o: main.cpp
-	$(CPP) -c main.cpp -o main.o $(CXXFLAGS)
+src/GameGlobals.o: src/GameGlobals.cpp
+	$(CPP) -c src/GameGlobals.cpp -o src/GameGlobals.o $(CXXFLAGS)
 
-MathUtils.o: MathUtils.cpp
-	$(CPP) -c MathUtils.cpp -o MathUtils.o $(CXXFLAGS)
+src/main.o: src/main.cpp
+	$(CPP) -c src/main.cpp -o src/main.o $(CXXFLAGS)
 
-GameGlobals.o: GameGlobals.cpp
-	$(CPP) -c GameGlobals.cpp -o GameGlobals.o $(CXXFLAGS)
+src/MathUtils.o: src/MathUtils.cpp
+	$(CPP) -c src/MathUtils.cpp -o src/MathUtils.o $(CXXFLAGS)
 
-SoundSystem.o: SoundSystem.cpp
-	$(CPP) -c SoundSystem.cpp -o SoundSystem.o $(CXXFLAGS)
+src/Planet.o: src/Planet.cpp
+	$(CPP) -c src/Planet.cpp -o src/Planet.o $(CXXFLAGS)
 
-Planet.o: Planet.cpp
-	$(CPP) -c Planet.cpp -o Planet.o $(CXXFLAGS)
+src/Renderer.o: src/Renderer.cpp
+	$(CPP) -c src/Renderer.cpp -o src/Renderer.o $(CXXFLAGS)
 
-Renderer.o: Renderer.cpp
-	$(CPP) -c Renderer.cpp -o Renderer.o $(CXXFLAGS)
+src/SoundSystem.o: src/SoundSystem.cpp
+	$(CPP) -c src/SoundSystem.cpp -o src/SoundSystem.o $(CXXFLAGS)
