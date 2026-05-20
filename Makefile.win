@@ -4,8 +4,8 @@
 CPP      = g++.exe
 CC       = gcc.exe
 WINDRES  = windres.exe
-OBJ      = main.o
-LINKOBJ  = main.o
+OBJ      = main.o MathUtils.o GameGlobals.o SoundSystem.o Planet.o Renderer.o
+LINKOBJ  = main.o MathUtils.o GameGlobals.o SoundSystem.o Planet.o Renderer.o
 LIBS     = -L"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib" -L"C:/Program Files (x86)/Dev-Cpp/MinGW32/mingw32/lib" -static-libstdc++ -static-libgcc -mwindows -lglut32 -lglu32 -lopengl32 -lwinmm -lgdi32
 INCS     = -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/mingw32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib/gcc/mingw32/4.8.1/include"
 CXXINCS  = -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/mingw32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib/gcc/mingw32/4.8.1/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW32/lib/gcc/mingw32/4.8.1/include/c++"
@@ -26,3 +26,18 @@ $(BIN): $(OBJ)
 
 main.o: main.cpp
 	$(CPP) -c main.cpp -o main.o $(CXXFLAGS)
+
+MathUtils.o: MathUtils.cpp
+	$(CPP) -c MathUtils.cpp -o MathUtils.o $(CXXFLAGS)
+
+GameGlobals.o: GameGlobals.cpp
+	$(CPP) -c GameGlobals.cpp -o GameGlobals.o $(CXXFLAGS)
+
+SoundSystem.o: SoundSystem.cpp
+	$(CPP) -c SoundSystem.cpp -o SoundSystem.o $(CXXFLAGS)
+
+Planet.o: Planet.cpp
+	$(CPP) -c Planet.cpp -o Planet.o $(CXXFLAGS)
+
+Renderer.o: Renderer.cpp
+	$(CPP) -c Renderer.cpp -o Renderer.o $(CXXFLAGS)
