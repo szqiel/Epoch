@@ -30,11 +30,20 @@ float AtmospherePressure = 0.0f;
 float CloudRotation = 0.0f;
 float TreePulse = 1.0f;
 
+float VisualTemperatureAxis = 0.24f;
+float VisualAtmosphereAxis = 0.20f;
+float VisualTemperatureOffset = 0.0f;
+float VisualAtmosphereOffset = 0.0f;
+float PhaseBannerSeconds = 0.0f;
+int LastPhase = 0;
+int GameWonStatus = 0;
+
 bool MouseIsDown = false;
 bool MouseIsDragging = false;
 bool GameOver = false;
 bool GameWon = false;
 bool GamePaused = false;
+bool InMainMenu = true;
 
 int LastMouseX = 0;
 int LastMouseY = 0;

@@ -12,6 +12,64 @@
 #include "GameConfig.h"
 #include "Planet.h"
 
+GLuint LowPolyTextureId = 0;
+
+void GenerateLowPolyTexture() {
+  const int Width = 128;
+  const int Height = 128;
+  unsigned char Data[Width * Height * 4];
+  
+  for (int Y = 0; Y < Height; Y++) {
+    for (int X = 0; X < Width; X++) {
+      float U = (float)X / (float)(Width - 1);
+      float V = (float)Y / (float)(Height - 1);
+      
+      float DistBottom = (float)fabs(V - 0.1f);
+      float DistLeft = (float)fabs(0.7f * (U - 0.1f) - 0.4f * (V - 0.1f)) / 0.806f;
+      float DistRight = (float)fabs(-0.7f * (U - 0.9f) - 0.4f * (V - 0.1f)) / 0.806f;
+      
+      float MinDist = DistBottom;
+      if (DistLeft < MinDist) MinDist = DistLeft;
+      if (DistRight < MinDist) MinDist = DistRight;
+      
+      float W_A = ((0.1f - 0.8f)*(U - 0.5f) + (0.5f - 0.9f)*(V - 0.8f)) / 0.56f;
+      float W_B = ((0.8f - 0.1f)*(U - 0.5f) + (0.1f - 0.5f)*(V - 0.8f)) / 0.56f;
+      float W_C = 1.0f - W_A - W_B;
+      
+      bool Inside = (W_A >= -0.01f && W_B >= -0.01f && W_C >= -0.01f);
+      
+      float BaseShade = 1.0f;
+      if (Inside) {
+        float EdgeShadow = 1.0f;
+        if (MinDist < 0.05f) {
+          EdgeShadow = 0.62f + 0.38f * (MinDist / 0.05f);
+        }
+        float Noise = ((float)(rand() % 100) / 100.0f - 0.5f) * 0.06f;
+        float Gradient = 1.0f - (V - 0.1f) * 0.12f; 
+        BaseShade = EdgeShadow * Gradient + Noise;
+        BaseShade = ClampValue(BaseShade, 0.0f, 1.0f);
+      } else {
+        BaseShade = 0.45f;
+      }
+      
+      int Index = (Y * Width + X) * 4;
+      unsigned char ByteVal = (unsigned char)(BaseShade * 255.0f);
+      Data[Index] = ByteVal;
+      Data[Index + 1] = ByteVal;
+      Data[Index + 2] = ByteVal;
+      Data[Index + 3] = 255;
+    }
+  }
+  
+  glGenTextures(1, &LowPolyTextureId);
+  glBindTexture(GL_TEXTURE_2D, LowPolyTextureId);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, Width, Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, Data);
+}
+
 // Internal rendering helper
 void AlignToNormal(Vector3 Normal) {
   Vector3 Up = MakeVector(0.0f, 1.0f, 0.0f);
@@ -106,23 +164,68 @@ void SetMaterial(float R, float G, float B, bool Shiny, bool Glow) {
 void SetBiomeMaterial(int Biome, int FaceIndex, float Altitude, float Height) {
   float Var = (float)((FaceIndex * 73 + 123) % 100) / 100.0f * 0.08f - 0.04f;
 
+  float HotFactor = ClampValue(VisualTemperatureAxis, 0.0f, 1.0f);
+  float ColdFactor = ClampValue(-VisualTemperatureAxis, 0.0f, 1.0f);
+  float NeutralFactor = 1.0f - HotFactor - ColdFactor;
+
   if (Biome == BiomeOcean) {
-    SetMaterial(0.11f + Var * 0.3f, 0.20f + Var * 0.4f, 0.34f + Var * 0.5f, true, false);
+    // Default: (0.11f, 0.20f, 0.34f)
+    // Hot target: (0.62f, 0.24f, 0.08f) (boiling toxic orange)
+    // Cold target: (0.65f, 0.80f, 0.95f) (frozen ice-blue)
+    float R = 0.11f * NeutralFactor + 0.62f * HotFactor + 0.65f * ColdFactor;
+    float G = 0.20f * NeutralFactor + 0.24f * HotFactor + 0.80f * ColdFactor;
+    float B = 0.34f * NeutralFactor + 0.08f * HotFactor + 0.95f * ColdFactor;
+    SetMaterial(R + Var * 0.3f, G + Var * 0.4f, B + Var * 0.5f, true, false);
   } else if (Biome == BiomeLand) {
-    SetMaterial(0.61f + Var * 0.5f, 0.40f + Var * 0.5f, 0.26f + Var * 0.4f, false, false);
+    // Default: (0.61f, 0.40f, 0.26f)
+    // Hot target: (0.16f, 0.14f, 0.12f) (scorched charcoal black)
+    // Cold target: (0.65f, 0.70f, 0.78f) (frozen tundra light grey)
+    float R = 0.61f * NeutralFactor + 0.16f * HotFactor + 0.65f * ColdFactor;
+    float G = 0.40f * NeutralFactor + 0.14f * HotFactor + 0.70f * ColdFactor;
+    float B = 0.26f * NeutralFactor + 0.12f * HotFactor + 0.78f * ColdFactor;
+    SetMaterial(R + Var * 0.5f, G + Var * 0.5f, B + Var * 0.4f, false, false);
   } else if (Biome == BiomeMountain) {
     float Progress = ElapsedSeconds / GameDuration;
-    if (Progress > 0.35f && (Height > 0.062f || (float)fabs(Altitude) > 1.15f)) {
-      SetMaterial(0.92f + Var * 0.08f, 0.94f + Var * 0.08f, 0.96f + Var * 0.08f, true, false);
+    bool HasSnow = (Progress > 0.35f && (Height > 0.062f || (float)fabs(Altitude) > 1.15f));
+    if (HasSnow && VisualTemperatureAxis <= 0.25f) {
+      // Snowy Peak - melts when too hot
+      float MeltFactor = ClampValue((VisualTemperatureAxis - 0.0f) / 0.25f, 0.0f, 1.0f);
+      float R = 0.92f * (1.0f - MeltFactor) + 0.35f * MeltFactor;
+      float G = 0.94f * (1.0f - MeltFactor) + 0.36f * MeltFactor;
+      float B = 0.96f * (1.0f - MeltFactor) + 0.42f * MeltFactor;
+      SetMaterial(R + Var * 0.08f, G + Var * 0.08f, B + Var * 0.08f, true, false);
     } else {
-      SetMaterial(0.35f + Var * 0.3f, 0.36f + Var * 0.3f, 0.42f + Var * 0.3f, false, false);
+      // Base mountain: default (0.35f, 0.36f, 0.42f)
+      // Hot target: (0.20f, 0.18f, 0.18f) (volcanic dark grey)
+      // Cold target: (0.80f, 0.85f, 0.90f) (snowy white mountain)
+      float R = 0.35f * NeutralFactor + 0.20f * HotFactor + 0.80f * ColdFactor;
+      float G = 0.36f * NeutralFactor + 0.18f * HotFactor + 0.85f * ColdFactor;
+      float B = 0.42f * NeutralFactor + 0.18f * HotFactor + 0.90f * ColdFactor;
+      SetMaterial(R + Var * 0.3f, G + Var * 0.3f, B + Var * 0.3f, false, false);
     }
   } else if (Biome == BiomeIce) {
-    SetMaterial(0.94f + Var * 0.1f, 0.98f + Var * 0.1f, 0.93f + Var * 0.1f, true, false);
+    // Default: (0.94f, 0.98f, 0.93f)
+    // Hot target: (0.55f, 0.50f, 0.45f) (dirty melting ice sludge)
+    float R = 0.94f * (1.0f - HotFactor) + 0.55f * HotFactor;
+    float G = 0.98f * (1.0f - HotFactor) + 0.50f * HotFactor;
+    float B = 0.93f * (1.0f - HotFactor) + 0.45f * HotFactor;
+    SetMaterial(R + Var * 0.1f, G + Var * 0.1f, B + Var * 0.1f, true, false);
   } else if (Biome == BiomeForest) {
-    SetMaterial(0.15f + Var * 0.3f, 0.21f + Var * 0.4f, 0.09f + Var * 0.2f, false, false);
+    // Default: (0.15f, 0.21f, 0.09f)
+    // Hot target: (0.45f, 0.32f, 0.12f) (wilted autumn yellow-brown)
+    // Cold target: (0.30f, 0.45f, 0.48f) (frosty teal pine)
+    float R = 0.15f * NeutralFactor + 0.45f * HotFactor + 0.30f * ColdFactor;
+    float G = 0.21f * NeutralFactor + 0.32f * HotFactor + 0.45f * ColdFactor;
+    float B = 0.09f * NeutralFactor + 0.12f * HotFactor + 0.48f * ColdFactor;
+    SetMaterial(R + Var * 0.3f, G + Var * 0.4f, B + Var * 0.2f, false, false);
   } else if (Biome == BiomeMagma) {
-    SetMaterial(0.88f + Var * 0.2f, 0.34f + Var * 0.3f, 0.13f + Var * 0.1f, false, true);
+    // Default: (0.88f, 0.34f, 0.13f), Glow = true
+    // Cold target: (0.18f, 0.18f, 0.19f), Glow = false (magma cools to solid black obsidian)
+    float R = 0.88f * (1.0f - ColdFactor) + 0.18f * ColdFactor;
+    float G = 0.34f * (1.0f - ColdFactor) + 0.18f * ColdFactor;
+    float B = 0.13f * (1.0f - ColdFactor) + 0.19f * ColdFactor;
+    bool ActiveGlow = (ColdFactor < 0.70f);
+    SetMaterial(R + Var * 0.2f, G + Var * 0.3f, B + Var * 0.1f, false, ActiveGlow);
   } else {
     SetMaterial(0.24f + Var * 0.3f, 0.24f + Var * 0.3f, 0.22f + Var * 0.3f, false, false);
   }
@@ -549,30 +652,113 @@ void DrawSurfaceObjects() {
   }
 }
 
-void DrawClouds() {
+void SetCloudMaterial(float R, float G, float B, float Alpha, bool Shiny, bool Glow) {
+  GLfloat Ambient[4];
+  GLfloat Diffuse[4];
+  GLfloat Specular[4];
+  GLfloat Emission[4];
+  Ambient[0] = Glow ? R * 0.85f : R * 0.64f;
+  Ambient[1] = Glow ? G * 0.60f : G * 0.64f;
+  Ambient[2] = Glow ? B * 0.42f : B * 0.64f;
+  Ambient[3] = Alpha;
+  Diffuse[0] = R;
+  Diffuse[1] = G;
+  Diffuse[2] = B;
+  Diffuse[3] = Alpha;
+  Specular[0] = Shiny ? 1.0f : 0.0f;
+  Specular[1] = Shiny ? 1.0f : 0.0f;
+  Specular[2] = Shiny ? 1.0f : 0.0f;
+  Specular[3] = Alpha;
+  Emission[0] = Glow ? R * 0.28f : 0.0f;
+  Emission[1] = Glow ? G * 0.10f : 0.0f;
+  Emission[2] = Glow ? B * 0.05f : 0.0f;
+  Emission[3] = Alpha;
+  glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT, Ambient);
+  glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE, Diffuse);
+  glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, Specular);
+  glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, Emission);
+  glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, Shiny ? 85.0f : 5.0f);
+}
+
+void DrawSingleCloud(float HotFactor, float ThickFactor, float Alpha) {
+  // Default cloud color is white-gray: (0.92f, 0.92f, 0.94f)
+  // If hot, blend to yellow-orange sulfur ash: (0.65f, 0.52f, 0.35f)
+  // If thick, blend to dark storm grey: (0.30f, 0.30f, 0.34f)
+  float R1 = 0.92f * (1.0f - HotFactor) + 0.65f * HotFactor;
+  float G1 = 0.92f * (1.0f - HotFactor) + 0.52f * HotFactor;
+  float B1 = 0.94f * (1.0f - HotFactor) + 0.35f * HotFactor;
+  R1 = R1 * (1.0f - ThickFactor) + 0.30f * ThickFactor;
+  G1 = G1 * (1.0f - ThickFactor) + 0.30f * ThickFactor;
+  B1 = B1 * (1.0f - ThickFactor) + 0.34f * ThickFactor;
+
+  float R2 = 0.86f * (1.0f - HotFactor) + 0.60f * HotFactor;
+  float G2 = 0.86f * (1.0f - HotFactor) + 0.48f * HotFactor;
+  float B2 = 0.89f * (1.0f - HotFactor) + 0.32f * HotFactor;
+  R2 = R2 * (1.0f - ThickFactor) + 0.26f * ThickFactor;
+  G2 = G2 * (1.0f - ThickFactor) + 0.26f * ThickFactor;
+  B2 = B2 * (1.0f - ThickFactor) + 0.30f * ThickFactor;
+
   glPushMatrix();
-  glRotatef(CloudRotation * 0.35f, 0.0f, 1.0f, 0.0f);
-  glRotatef(CloudRotation * 0.05f, 1.0f, 0.0f, 0.0f);
-  for (int I = 0; I < 26; I++) {
-    float Y = -0.86f + 1.72f * ((float)I + 0.5f) / 26.0f;
-    float R = (float)sqrt(std::max(0.0f, 1.0f - Y * Y));
-    float A = (float)I * 2.399963f;
-    Vector3 N =
-        NormalizeVector(MakeVector((float)cos(A) * R, Y, (float)sin(A) * R));
-    Vector3 P = ScaleVector(N, PlanetRadius + 0.74f +
-                                   (float)sin((float)I * 1.41f) * 0.07f);
+  SetCloudMaterial(R1, G1, B1, Alpha, true, false);
+  glPushMatrix();
+  glScalef(0.34f, 0.16f, 0.22f);
+  glutSolidIcosahedron();
+  glPopMatrix();
+  
+  SetCloudMaterial(R2, G2, B2, Alpha, true, false);
+  glPushMatrix();
+  glTranslatef(0.24f, 0.03f, 0.05f);
+  glScalef(0.24f, 0.13f, 0.18f);
+  glutSolidIcosahedron();
+  glPopMatrix();
+  
+  glPushMatrix();
+  glTranslatef(-0.21f, -0.02f, -0.06f);
+  glScalef(0.22f, 0.12f, 0.16f);
+  glutSolidIcosahedron();
+  glPopMatrix();
+  glPopMatrix();
+}
+
+void DrawClouds() {
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+  glDepthMask(GL_FALSE);
+
+  float HotFactor = ClampValue(VisualTemperatureAxis, 0.0f, 1.0f);
+  float ThickFactor = ClampValue(VisualAtmosphereAxis, 0.0f, 1.0f);
+  float NormAtmos = (VisualAtmosphereAxis + 1.15f) / 2.3f;
+  float CloudAlpha = ClampValue(NormAtmos * 0.88f, 0.0f, 0.88f);
+
+  if (CloudAlpha > 0.01f) {
     glPushMatrix();
-    glTranslatef(P.X, P.Y, P.Z);
-    AlignToNormal(N);
-    glRotatef((float)I * 37.0f, 0.0f, 1.0f, 0.0f);
-    float S = 0.86f +
-              0.14f * HashVector(MakeVector((float)I * 0.37f, (float)I * 1.13f,
-                                            (float)I * 2.71f));
-    glScalef(S, S, S);
-    glCallList(CloudList);
+    glRotatef(CloudRotation * 0.35f, 0.0f, 1.0f, 0.0f);
+    glRotatef(CloudRotation * 0.05f, 1.0f, 0.0f, 0.0f);
+    for (int I = 0; I < 26; I++) {
+      float Y = -0.86f + 1.72f * ((float)I + 0.5f) / 26.0f;
+      float R = (float)sqrt(std::max(0.0f, 1.0f - Y * Y));
+      float A = (float)I * 2.399963f;
+      Vector3 N =
+          NormalizeVector(MakeVector((float)cos(A) * R, Y, (float)sin(A) * R));
+      Vector3 P = ScaleVector(N, PlanetRadius + 0.74f +
+                                     (float)sin((float)I * 1.41f) * 0.07f);
+      glPushMatrix();
+      glTranslatef(P.X, P.Y, P.Z);
+      AlignToNormal(N);
+      glRotatef((float)I * 37.0f, 0.0f, 1.0f, 0.0f);
+      float S = 0.86f +
+                0.14f * HashVector(MakeVector((float)I * 0.37f, (float)I * 1.13f,
+                                              (float)I * 2.71f));
+      float AtmosScale = ClampValue(NormAtmos * 1.30f, 0.0f, 1.0f);
+      glScalef(S * AtmosScale, S * AtmosScale, S * AtmosScale);
+      DrawSingleCloud(HotFactor, ThickFactor, CloudAlpha);
+      glPopMatrix();
+    }
     glPopMatrix();
   }
-  glPopMatrix();
+
+  glDepthMask(GL_TRUE);
+  glDisable(GL_BLEND);
 }
 
 void DrawMeteors() {
@@ -618,19 +804,19 @@ void DrawAtmosphereRing() {
   float Green = 0.65f;
   float Blue = 0.95f;
 
-  if (TemperatureAxis > 0.35f) {
-    float Factor = ClampValue((TemperatureAxis - 0.35f) / 0.65f, 0.0f, 1.0f);
+  if (VisualTemperatureAxis > 0.35f) {
+    float Factor = ClampValue((VisualTemperatureAxis - 0.35f) / 0.65f, 0.0f, 1.0f);
     Red = 0.15f * (1.0f - Factor) + 0.90f * Factor;
     Green = 0.65f * (1.0f - Factor) + 0.35f * Factor;
     Blue = 0.95f * (1.0f - Factor) + 0.08f * Factor;
-  } else if (TemperatureAxis < -0.35f) {
-    float Factor = ClampValue((-TemperatureAxis - 0.35f) / 0.65f, 0.0f, 1.0f);
+  } else if (VisualTemperatureAxis < -0.35f) {
+    float Factor = ClampValue((-VisualTemperatureAxis - 0.35f) / 0.65f, 0.0f, 1.0f);
     Red = 0.15f * (1.0f - Factor) + 0.85f * Factor;
     Green = 0.65f * (1.0f - Factor) + 0.92f * Factor;
     Blue = 0.95f * (1.0f - Factor) + 1.00f * Factor;
   }
 
-  float NormAtmos = (AtmosphereAxis + 1.15f) / 2.3f;
+  float NormAtmos = (VisualAtmosphereAxis + 1.15f) / 2.3f;
   float Alpha = 0.015f + NormAtmos * 0.065f;
 
   glColor4f(Red, Green, Blue, Alpha);
@@ -696,6 +882,37 @@ void DrawOverlay() {
   glEnable(GL_BLEND);
   glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+  if (InMainMenu) {
+    glColor4f(0.03f, 0.04f, 0.06f, 0.70f);
+    glBegin(GL_QUADS);
+    glVertex2f(0.0f, 0.0f);
+    glVertex2f((float)WindowWidth, 0.0f);
+    glVertex2f((float)WindowWidth, (float)WindowHeight);
+    glVertex2f(0.0f, (float)WindowHeight);
+    glEnd();
+
+    float MidX = (float)WindowWidth * 0.5f;
+    float MidY = (float)WindowHeight * 0.5f;
+
+    glColor3f(0.92f, 0.86f, 0.40f);
+    DrawCenteredText(MidX, MidY + 40.0f, "E P O C H", GLUT_BITMAP_TIMES_ROMAN_24);
+    glColor3f(0.80f, 0.82f, 0.86f);
+    DrawCenteredText(MidX, MidY + 5.0f, "3D Planetary & Climate Simulator", GLUT_BITMAP_HELVETICA_12);
+
+    float Pulse = (float)sin(ElapsedSeconds * 4.0f) * 0.25f + 0.75f;
+    glColor4f(0.92f, 0.86f, 0.40f, Pulse);
+    DrawCenteredText(MidX, MidY - 60.0f, "PRESS ENTER OR CLICK TO START", GLUT_BITMAP_HELVETICA_12);
+
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_LIGHTING);
+    glDisable(GL_BLEND);
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+    return;
+  }
+
   // Left Sidebar background panel
   glColor4f(0.04f, 0.05f, 0.08f, 0.88f);
   glBegin(GL_QUADS);
@@ -714,43 +931,57 @@ void DrawOverlay() {
   glEnd();
   glLineWidth(1.0f);
 
+  int CurrentPhase = 1 + (int)(ElapsedSeconds / 60.0f);
+  if (CurrentPhase > 5) CurrentPhase = 5;
+
+  std::string EraName = "";
+  if (CurrentPhase == 1) EraName = "Phase 1: Hadean";
+  else if (CurrentPhase == 2) EraName = "Phase 2: Archean";
+  else if (CurrentPhase == 3) EraName = "Phase 3: Proterozoic";
+  else if (CurrentPhase == 4) EraName = "Phase 4: Phanerozoic";
+  else EraName = "Phase 5: Anthropocene";
+
   glColor3f(0.92f, 0.86f, 0.40f);
   DrawText(18.0f, WindowHeight - 32.0f, "Epoch", GLUT_BITMAP_HELVETICA_18);
+  
+  glColor3f(0.85f, 0.85f, 0.85f);
+  DrawText(18.0f, WindowHeight - 52.0f, EraName, GLUT_BITMAP_HELVETICA_12);
+  
   glColor3f(0.60f, 0.65f, 0.72f);
-  DrawText(18.0f, WindowHeight - 56.0f, "Selected God Tool:", GLUT_BITMAP_HELVETICA_10);
+  DrawText(18.0f, WindowHeight - 72.0f, "Selected God Tool:", GLUT_BITMAP_HELVETICA_10);
 
   for (int I = 0; I < 8; I++) {
-    float Y = WindowHeight - 96.0f - (float)I * 48.0f;
+    float Y = WindowHeight - 116.0f - (float)I * 45.0f;
     bool Selected = (SelectedTool == I);
 
     if (Selected) {
       float Pulse = (float)sin(ElapsedSeconds * 6.0f) * 0.15f + 0.75f;
       glColor4f(0.92f, 0.76f, 0.20f, Pulse);
       glBegin(GL_LINE_LOOP);
-      glVertex2f(14.0f, Y - 26.0f);
-      glVertex2f(172.0f, Y - 26.0f);
-      glVertex2f(172.0f, Y + 14.0f);
-      glVertex2f(14.0f, Y + 14.0f);
+      glVertex2f(14.0f, Y - 23.0f);
+      glVertex2f(172.0f, Y - 23.0f);
+      glVertex2f(172.0f, Y + 13.0f);
+      glVertex2f(14.0f, Y + 13.0f);
       glEnd();
 
       glColor4f(0.10f, 0.16f, 0.26f, 0.90f);
     } else {
       glColor4f(0.18f, 0.20f, 0.24f, 0.40f);
       glBegin(GL_LINE_LOOP);
-      glVertex2f(16.0f, Y - 24.0f);
-      glVertex2f(170.0f, Y - 24.0f);
-      glVertex2f(170.0f, Y + 12.0f);
-      glVertex2f(16.0f, Y + 12.0f);
+      glVertex2f(16.0f, Y - 21.0f);
+      glVertex2f(170.0f, Y - 21.0f);
+      glVertex2f(170.0f, Y + 11.0f);
+      glVertex2f(16.0f, Y + 11.0f);
       glEnd();
 
       glColor4f(0.06f, 0.08f, 0.10f, 0.55f);
     }
 
     glBegin(GL_QUADS);
-    glVertex2f(16.0f, Y - 24.0f);
-    glVertex2f(170.0f, Y - 24.0f);
-    glVertex2f(170.0f, Y + 12.0f);
-    glVertex2f(16.0f, Y + 12.0f);
+    glVertex2f(16.0f, Y - 21.0f);
+    glVertex2f(170.0f, Y - 21.0f);
+    glVertex2f(170.0f, Y + 11.0f);
+    glVertex2f(16.0f, Y + 11.0f);
     glEnd();
 
     if (I == ToolTree) {
@@ -771,29 +1002,29 @@ void DrawOverlay() {
       glColor3f(0.88f, 0.30f, 0.30f);
     }
     glBegin(GL_QUADS);
-    glVertex2f(25.0f, Y - 15.0f);
-    glVertex2f(47.0f, Y - 15.0f);
-    glVertex2f(47.0f, Y + 7.0f);
-    glVertex2f(25.0f, Y + 7.0f);
+    glVertex2f(25.0f, Y - 13.0f);
+    glVertex2f(47.0f, Y - 13.0f);
+    glVertex2f(47.0f, Y + 5.0f);
+    glVertex2f(25.0f, Y + 5.0f);
     glEnd();
 
     glColor3f(0.90f, 0.90f, 0.90f);
     glBegin(GL_LINE_LOOP);
-    glVertex2f(25.0f, Y - 15.0f);
-    glVertex2f(47.0f, Y - 15.0f);
-    glVertex2f(47.0f, Y + 7.0f);
-    glVertex2f(25.0f, Y + 7.0f);
+    glVertex2f(25.0f, Y - 13.0f);
+    glVertex2f(47.0f, Y - 13.0f);
+    glVertex2f(47.0f, Y + 5.0f);
+    glVertex2f(25.0f, Y + 5.0f);
     glEnd();
 
     glColor3f(1.0f, 1.0f, 1.0f);
-    DrawText(33.0f, Y - 3.0f, FormatFloat((float)(I + 1), 0), GLUT_BITMAP_HELVETICA_10);
+    DrawText(33.0f, Y - 5.0f, FormatFloat((float)(I + 1), 0), GLUT_BITMAP_HELVETICA_10);
 
     if (Selected) {
       glColor3f(1.0f, 0.92f, 0.50f);
     } else {
       glColor3f(0.80f, 0.82f, 0.86f);
     }
-    DrawText(58.0f, Y - 2.0f, ToolName(I), GLUT_BITMAP_HELVETICA_12);
+    DrawText(58.0f, Y - 4.0f, ToolName(I), GLUT_BITMAP_HELVETICA_12);
   }
 
   // Temperature Gauge
@@ -820,7 +1051,7 @@ void DrawOverlay() {
   glVertex2f(94.0f, 218.0f);
   glVertex2f(94.0f, 232.0f);
   glEnd();
-  float TempMarkerX = 94.0f + TemperatureAxis * 76.0f;
+  float TempMarkerX = 94.0f + VisualTemperatureAxis * 76.0f;
   TempMarkerX = ClampValue(TempMarkerX, 18.0f, 170.0f);
   glColor3f(1.0f, 0.95f, 0.20f);
   glBegin(GL_QUADS);
@@ -854,7 +1085,7 @@ void DrawOverlay() {
   glVertex2f(94.0f, 158.0f);
   glVertex2f(94.0f, 172.0f);
   glEnd();
-  float AtmosMarkerX = 94.0f + AtmosphereAxis * 76.0f;
+  float AtmosMarkerX = 94.0f + VisualAtmosphereAxis * 76.0f;
   AtmosMarkerX = ClampValue(AtmosMarkerX, 18.0f, 170.0f);
   glColor3f(1.0f, 0.95f, 0.20f);
   glBegin(GL_QUADS);
@@ -952,9 +1183,9 @@ void DrawOverlay() {
   glVertex2f(0.0f, 82.0f);
   glEnd();
 
-  // Indicator Dot
-  float DotX = ClampValue(TemperatureAxis, -1.0f, 1.0f) * 75.0f;
-  float DotY = ClampValue(AtmosphereAxis, -1.0f, 1.0f) * 75.0f;
+  // Indicator Dot using Visual axes
+  float DotX = ClampValue(VisualTemperatureAxis, -1.0f, 1.0f) * 75.0f;
+  float DotY = ClampValue(VisualAtmosphereAxis, -1.0f, 1.0f) * 75.0f;
 
   // Pulsing halo glow
   float PulsingHaloRadius = 12.0f + (float)sin(ElapsedSeconds * 8.0f) * 3.0f;
@@ -997,25 +1228,144 @@ void DrawOverlay() {
                      "EXTREME EVENT IMPACT", GLUT_BITMAP_HELVETICA_18);
   }
 
-  if (GameOver) {
-    glColor4f(0.02f, 0.03f, 0.04f, 0.82f);
+  // Phase Banner HUD
+  if (PhaseBannerSeconds > 0.0f && !GameOver) {
+    float BannerAlpha = ClampValue(PhaseBannerSeconds, 0.0f, 1.0f);
+    float HalfWidth = 320.0f;
+    float HalfHeight = 60.0f;
+    float MidX = (float)WindowWidth * 0.5f;
+    float MidY = (float)WindowHeight * 0.5f;
+
+    // Glass panel background
+    glColor4f(0.04f, 0.05f, 0.08f, 0.85f * BannerAlpha);
     glBegin(GL_QUADS);
-    glVertex2f(230.0f, (float)WindowHeight * 0.5f - 75.0f);
-    glVertex2f((float)WindowWidth - 230.0f, (float)WindowHeight * 0.5f - 75.0f);
-    glVertex2f((float)WindowWidth - 230.0f, (float)WindowHeight * 0.5f + 75.0f);
-    glVertex2f(230.0f, (float)WindowHeight * 0.5f + 75.0f);
+    glVertex2f(MidX - HalfWidth, MidY - HalfHeight);
+    glVertex2f(MidX + HalfWidth, MidY - HalfHeight);
+    glVertex2f(MidX + HalfWidth, MidY + HalfHeight);
+    glVertex2f(MidX - HalfWidth, MidY + HalfHeight);
     glEnd();
-    glColor3f(1.0f, 1.0f, 1.0f);
-    std::string Title = GameWon ? "PLANET HABITABLE" : "PLANET COLLAPSED";
-    std::string Body = GameWon
-                           ? "You guided 5 billion years of survival."
-                           : "The final balance was outside the middle ring.";
-    DrawCenteredText((float)WindowWidth * 0.5f, (float)WindowHeight * 0.5f + 24.0f,
-                     Title, GLUT_BITMAP_HELVETICA_18);
-    DrawCenteredText((float)WindowWidth * 0.5f, (float)WindowHeight * 0.5f - 6.0f,
-                     Body, GLUT_BITMAP_HELVETICA_12);
-    DrawCenteredText((float)WindowWidth * 0.5f, (float)WindowHeight * 0.5f - 34.0f,
-                     "Press R to restart", GLUT_BITMAP_HELVETICA_12);
+
+    // Golden border
+    glColor4f(1.0f, 0.85f, 0.20f, 0.70f * BannerAlpha);
+    glLineWidth(2.0f);
+    glBegin(GL_LINE_LOOP);
+    glVertex2f(MidX - HalfWidth, MidY - HalfHeight);
+    glVertex2f(MidX + HalfWidth, MidY - HalfHeight);
+    glVertex2f(MidX + HalfWidth, MidY + HalfHeight);
+    glVertex2f(MidX - HalfWidth, MidY + HalfHeight);
+    glEnd();
+    glLineWidth(1.0f);
+
+    std::string BannerTitle = "";
+    std::string BannerLine1 = "";
+    std::string BannerLine2 = "";
+
+    if (CurrentPhase == 1) {
+      BannerTitle = "PHASE 1: HADEAN ERA (0.0B - 1.0B Years)";
+      BannerLine1 = "Challenge: Runaway heat drift and thinning atmosphere.";
+      BannerLine2 = "Heal the planet from high-frequency meteor bombardments!";
+    } else if (CurrentPhase == 2) {
+      BannerTitle = "PHASE 2: ARCHEAN ERA (1.0B - 2.0B Years)";
+      BannerLine1 = "Challenge: Aggressive atmospheric buildup from volcanic outgassing.";
+      BannerLine2 = "Cool and reduce pressure using Rain and Ice tools!";
+    } else if (CurrentPhase == 3) {
+      BannerTitle = "PHASE 3: PROTEROZOIC ERA (2.0B - 3.0B Years)";
+      BannerLine1 = "Challenge: Snowball Earth. Aggressive temperature collapse.";
+      BannerLine2 = "Prevent deep freeze and high frequency Ice Ages!";
+    } else if (CurrentPhase == 4) {
+      BannerTitle = "PHASE 4: PHANEROZOIC ERA (3.0B - 4.0B Years)";
+      BannerLine1 = "Challenge: Biological bloom with high climate volatility.";
+      BannerLine2 = "Balance temperature and atmosphere for complex life.";
+    } else {
+      BannerTitle = "PHASE 5: ANTHROPOCENE ERA (4.0B - 5.0B Years)";
+      BannerLine1 = "Challenge: Final Criticality. Industrial depletion & solar heating.";
+      BannerLine2 = "Can you survive the ultimate phase and establish a Golden Era?";
+    }
+
+    glColor4f(1.0f, 0.85f, 0.20f, BannerAlpha);
+    DrawCenteredText(MidX, MidY + 24.0f, BannerTitle, GLUT_BITMAP_HELVETICA_18);
+
+    glColor4f(0.90f, 0.90f, 0.90f, BannerAlpha);
+    DrawCenteredText(MidX, MidY - 4.0f, BannerLine1, GLUT_BITMAP_HELVETICA_12);
+    DrawCenteredText(MidX, MidY - 26.0f, BannerLine2, GLUT_BITMAP_HELVETICA_12);
+  }
+
+  // Game Over overlay screen
+  if (GameOver) {
+    float HalfWidth = 280.0f;
+    float HalfHeight = 75.0f;
+    float MidX = (float)WindowWidth * 0.5f;
+    float MidY = (float)WindowHeight * 0.5f;
+
+    std::string Title = "";
+    std::string Line1 = "";
+    std::string Line2 = "";
+    float TitleR = 1.0f, TitleG = 1.0f, TitleB = 1.0f;
+
+    if (GameWonStatus == 2) {
+      Title = "PLANET HABITABLE: GOLDEN ERA";
+      Line1 = "5 billion years of survival. Life flourishes in";
+      Line2 = "perfect, glorious, and permanent equilibrium!";
+      TitleR = 0.2f; TitleG = 0.85f; TitleB = 0.35f;
+    } else if (GameWonStatus == 1) {
+      Title = "PLANET STABILIZED: HARSH LIFE";
+      Line1 = "The biosphere survived, but conditions are extremely volatile.";
+      Line2 = "Survival remains a difficult, day-to-day struggle.";
+      TitleR = 0.92f; TitleG = 0.64f; TitleB = 0.18f;
+    } else { // GameWonStatus == 0
+      TitleR = 0.90f; TitleG = 0.22f; TitleB = 0.16f;
+      if (VisualTemperatureAxis > 0.5f) {
+        Title = "PLANET COLLAPSED: LIVING HELL";
+        Line1 = "Runaway greenhouse effect boiled the oceans.";
+        Line2 = "The planet is a scorched, boiling magma wasteland.";
+      } else if (VisualTemperatureAxis < -0.5f) {
+        Title = "PLANET COLLAPSED: FROZEN WASTELAND";
+        Line1 = "Extreme glaciation froze the entire crust.";
+        Line2 = "The planet is a completely dead, frozen snowball.";
+      } else if (VisualAtmosphereAxis < -0.4f) {
+        Title = "PLANET COLLAPSED: BARREN VACUUM";
+        Line1 = "The atmosphere was completely stripped away.";
+        Line2 = "Solar winds have left the planetary surface sterile.";
+      } else if (VisualAtmosphereAxis > 0.4f) {
+        Title = "PLANET COLLAPSED: TOXIC SMOG";
+        Line1 = "Extreme atmospheric pressure crushed all life";
+        Line2 = "under a dense, choking blanket of poisonous gas.";
+      } else {
+        Title = "PLANET COLLAPSED: DEAD ZONE";
+        Line1 = "The climate balance was completely lost.";
+        Line2 = "The ecosystem collapsed into an uninhabitable void.";
+      }
+    }
+
+    // Panel Background
+    glColor4f(0.04f, 0.05f, 0.08f, 0.90f);
+    glBegin(GL_QUADS);
+    glVertex2f(MidX - HalfWidth, MidY - HalfHeight);
+    glVertex2f(MidX + HalfWidth, MidY - HalfHeight);
+    glVertex2f(MidX + HalfWidth, MidY + HalfHeight);
+    glVertex2f(MidX - HalfWidth, MidY + HalfHeight);
+    glEnd();
+
+    // Border Accent
+    glColor4f(TitleR, TitleG, TitleB, 0.60f);
+    glLineWidth(2.0f);
+    glBegin(GL_LINE_LOOP);
+    glVertex2f(MidX - HalfWidth, MidY - HalfHeight);
+    glVertex2f(MidX + HalfWidth, MidY - HalfHeight);
+    glVertex2f(MidX + HalfWidth, MidY + HalfHeight);
+    glVertex2f(MidX - HalfWidth, MidY + HalfHeight);
+    glEnd();
+    glLineWidth(1.0f);
+
+    glColor3f(TitleR, TitleG, TitleB);
+    DrawCenteredText(MidX, MidY + 34.0f, Title, GLUT_BITMAP_HELVETICA_18);
+
+    glColor3f(0.90f, 0.90f, 0.90f);
+    DrawCenteredText(MidX, MidY + 4.0f, Line1, GLUT_BITMAP_HELVETICA_12);
+    DrawCenteredText(MidX, MidY - 18.0f, Line2, GLUT_BITMAP_HELVETICA_12);
+
+    glColor3f(0.60f, 0.65f, 0.72f);
+    DrawCenteredText(MidX, MidY - 48.0f, "Press R to restart", GLUT_BITMAP_HELVETICA_10);
   }
 
   glEnable(GL_DEPTH_TEST);

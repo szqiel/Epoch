@@ -38,11 +38,13 @@ int MatureBiomeForFace(Face &F, float Progress) {
   if (Progress > 0.76f && Polar > 0.78f) {
     return BiomeIce;
   }
+  if (OceanField < -0.12f) {
+    return BiomeOcean;
+  }
   if (OceanField > 0.22f && RidgeField > 0.72f) {
     return BiomeMountain;
   }
-  if (Progress > 0.52f && OceanField > 0.08f && F.Seed > 0.35f &&
-      F.Seed < 0.82f) {
+  if (Progress > 0.52f && OceanField > 0.05f && RidgeField < 0.65f) {
     return BiomeForest;
   }
   return BiomeLand;
@@ -51,19 +53,19 @@ int MatureBiomeForFace(Face &F, float Progress) {
 void ApplyMatureBiome(Face &F, int Target) {
   F.Biome = Target;
   if (Target == BiomeOcean) {
-    F.Height = -0.24f + F.Seed * 0.02f;
+    F.Height = -0.12f + F.Seed * 0.01f;
     F.TreeCount = 0;
   } else if (Target == BiomeLand) {
-    F.Height = 0.04f + F.Seed * 0.03f;
+    F.Height = 0.02f + F.Seed * 0.015f;
     F.TreeCount = 0;
   } else if (Target == BiomeForest) {
-    F.Height = 0.06f + F.Seed * 0.025f;
+    F.Height = 0.03f + F.Seed * 0.01f;
     F.TreeCount = 0;
   } else if (Target == BiomeMountain) {
-    F.Height = 0.22f + F.Seed * 0.08f;
+    F.Height = 0.10f + F.Seed * 0.04f;
     F.TreeCount = 0;
   } else if (Target == BiomeIce) {
-    F.Height = 0.08f + F.Seed * 0.03f;
+    F.Height = 0.04f + F.Seed * 0.015f;
     F.TreeCount = 0;
   }
 }
@@ -114,13 +116,13 @@ void AddSubdividedFace(std::vector<Face> &Faces, Vector3 A, Vector3 B,
     float Score = PlateField + (Noise - 0.5f) * 0.10f;
     if (Score > 0.22f && RidgeField > 0.72f) {
       NewFace.Biome = BiomeMountain;
-      NewFace.Height = 0.22f + Noise * 0.07f;
+      NewFace.Height = 0.10f + Noise * 0.03f;
     } else if (Score > -0.06f) {
       NewFace.Biome = BiomeScorched;
-      NewFace.Height = 0.04f + Noise * 0.03f;
+      NewFace.Height = 0.02f + Noise * 0.01f;
     } else {
       NewFace.Biome = BiomeMagma;
-      NewFace.Height = -0.24f + Noise * 0.02f;
+      NewFace.Height = -0.12f + Noise * 0.01f;
     }
     Faces.push_back(NewFace);
     return;
@@ -165,16 +167,16 @@ Vector3 WarpedVertex(Vector3 Base, int VertIdx) {
   float Time = ElapsedSeconds;
   float Noise = VertexNoise(Base);
   float Phase = Noise * Pi * 12.0f;
-  float Drift = (float)sin(Time * 0.050f + Phase) * 0.018f;
+  float Drift = (float)sin(Time * 0.050f + Phase) * 0.005f;
   Vector3 Shift = MakeVector((float)sin(Phase * 1.37f + Base.Z) * Drift,
                              (float)cos(Phase * 0.91f + Base.X) * Drift,
                              (float)sin(Phase * 2.11f + Base.Y) * Drift);
   Vector3 Direction = NormalizeVector(AddVector(Base, Shift));
   float Ridge =
-      (float)sin(Base.X * 9.0f + Base.Y * 4.5f - Base.Z * 6.5f) * 0.026f;
-  float Pulse = (float)sin(Time * 0.12f + Phase * 0.7f) * 0.008f;
+      (float)sin(Base.X * 9.0f + Base.Y * 4.5f - Base.Z * 6.5f) * 0.01f;
+  float Pulse = (float)sin(Time * 0.12f + Phase * 0.7f) * 0.004f;
   float HeightOffset = (VertIdx >= 0 && VertIdx < (int)VertexHeights.size()) ? VertexHeights[VertIdx] : 0.0f;
-  float Radius = PlanetRadius + (Noise - 0.5f) * 0.15f + Ridge + Pulse + HeightOffset;
+  float Radius = PlanetRadius + (Noise - 0.5f) * 0.04f + Ridge + Pulse + HeightOffset;
   return ScaleVector(Direction, Radius);
 }
 
@@ -227,7 +229,7 @@ void AffectNeighbors(int FaceIndex, float Radius, int Biome, int TreeChange,
     if (D < Radius) {
       PlanetFaces[I].Biome = Biome;
       PlanetFaces[I].Height += HeightChange * (1.0f - D / Radius);
-      PlanetFaces[I].Height = ClampValue(PlanetFaces[I].Height, -0.35f, 0.45f);
+      PlanetFaces[I].Height = ClampValue(PlanetFaces[I].Height, -0.15f, 0.20f);
       if (TreeChange > 0) {
         PlanetFaces[I].TreeCount =
             std::min(4, PlanetFaces[I].TreeCount + TreeChange);

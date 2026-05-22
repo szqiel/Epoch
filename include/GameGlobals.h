@@ -34,11 +34,20 @@ extern float AtmospherePressure;
 extern float CloudRotation;
 extern float TreePulse;
 
+extern float VisualTemperatureAxis;
+extern float VisualAtmosphereAxis;
+extern float VisualTemperatureOffset;
+extern float VisualAtmosphereOffset;
+extern float PhaseBannerSeconds;
+extern int LastPhase;
+extern int GameWonStatus;
+
 extern bool MouseIsDown;
 extern bool MouseIsDragging;
 extern bool GameOver;
 extern bool GameWon;
 extern bool GamePaused;
+extern bool InMainMenu;
 
 extern int LastMouseX;
 extern int LastMouseY;

@@ -161,9 +161,9 @@ void MeteorImpact(int FaceIndex, bool PlayerMade) {
     return;
   }
   AffectNeighbors(FaceIndex, PlayerMade ? 0.34f : 0.50f, BiomeScorched, -1,
-                  -0.08f, true);
+                  -0.03f, true);
   PlanetFaces[FaceIndex].Biome = BiomeMagma;
-  PlanetFaces[FaceIndex].Height -= 0.12f;
+  PlanetFaces[FaceIndex].Height -= 0.05f;
   SpawnParticlesOnFace(FaceIndex, 2, 38);
   PlaySfx(2);
   HeatPressure += PlayerMade ? 0.50f : 0.38f;
@@ -202,25 +202,25 @@ void ApplyTool(int FaceIndex) {
     AtmospherePressure += 0.12f;
     PlaySfx(1);
   } else if (SelectedTool == ToolRain) {
-    AffectNeighbors(FaceIndex, 0.23f, BiomeLand, 0, 0.01f, true);
+    AffectNeighbors(FaceIndex, 0.23f, BiomeLand, 0, 0.005f, true);
     SpawnParticlesOnFace(FaceIndex, 0, 48);
     HeatPressure -= 0.10f;
     PlaySfx(3);
   } else if (SelectedTool == ToolIce) {
-    AffectNeighbors(FaceIndex, 0.23f, BiomeIce, 0, 0.02f, true);
+    AffectNeighbors(FaceIndex, 0.23f, BiomeIce, 0, 0.01f, true);
     SpawnParticlesOnFace(FaceIndex, 1, 50);
     HeatPressure -= 0.20f;
     PlaySfx(1);
   } else if (SelectedTool == ToolFire) {
-    AffectNeighbors(FaceIndex, 0.24f, BiomeScorched, -1, -0.01f, true);
+    AffectNeighbors(FaceIndex, 0.24f, BiomeScorched, -1, -0.005f, true);
     SpawnParticlesOnFace(FaceIndex, 2, 28);
     HeatPressure += 0.10f;
     PlaySfx(2);
   } else if (SelectedTool == ToolMountain) {
-    AffectNeighbors(FaceIndex, 0.19f, BiomeMountain, 0, 0.075f, true);
+    AffectNeighbors(FaceIndex, 0.19f, BiomeMountain, 0, 0.035f, true);
     PlaySfx(2);
   } else if (SelectedTool == ToolWater) {
-    AffectNeighbors(FaceIndex, 0.21f, BiomeOcean, -1, -0.055f, true);
+    AffectNeighbors(FaceIndex, 0.21f, BiomeOcean, -1, -0.025f, true);
     SpawnParticlesOnFace(FaceIndex, 0, 28);
     PlaySfx(3);
   } else if (SelectedTool == ToolMeteor) {
@@ -242,8 +242,10 @@ void ApplyTool(int FaceIndex) {
 
 void TriggerIceAge() {
   for (size_t I = 0; I < PlanetFaces.size(); I++) {
-    if (PlanetFaces[I].Seed > 0.62f || PlanetFaces[I].Center.Y > 1.1f ||
-        PlanetFaces[I].Center.Y < -1.1f) {
+    Vector3 NormCenter = NormalizeVector(PlanetFaces[I].Center);
+    float IceField = GetGeographyNoise(NormCenter);
+    float Polar = (float)fabs(NormCenter.Y);
+    if (IceField > -0.05f || Polar > 0.55f) {
       PlanetFaces[I].Biome = BiomeIce;
       PlanetFaces[I].TreeCount = 0;
       PlanetFaces[I].Locked = true;
@@ -255,8 +257,19 @@ void TriggerIceAge() {
 }
 
 void BeginDisaster() {
-  DisasterKind = RandomUnit() < 0.55f ? DisasterMeteor : DisasterIceAge;
-  DisasterCountdown = 8.0f;
+  int CurrentPhase = 1 + (int)(ElapsedSeconds / 60.0f);
+  if (CurrentPhase > 5) CurrentPhase = 5;
+
+  if (CurrentPhase == 1 || CurrentPhase == 2) {
+    DisasterKind = DisasterMeteor;
+  } else if (CurrentPhase == 3) {
+    DisasterKind = DisasterIceAge;
+  } else {
+    DisasterKind = RandomUnit() < 0.55f ? DisasterMeteor : DisasterIceAge;
+  }
+
+  // Warning countdown speed scales up in later phases
+  DisasterCountdown = (CurrentPhase >= 4) ? 5.5f : 8.0f;
   DisasterTargetFace = rand() % (int)PlanetFaces.size();
 }
 
@@ -269,8 +282,30 @@ void ResolveDisaster() {
   DisasterKind = DisasterNone;
   DisasterCountdown = 0.0f;
   DisasterTargetFace = -1;
-  NextDisasterSeconds = ElapsedSeconds + DisasterIntervalMinimum +
-                        RandomUnit() * DisasterIntervalRange;
+
+  // Phase-dependent interval scaling
+  float MinInt = 95.0f;
+  float RangeInt = 45.0f;
+  int CurrentPhase = 1 + (int)(ElapsedSeconds / 60.0f);
+  if (CurrentPhase > 5) CurrentPhase = 5;
+
+  if (CurrentPhase == 1) {
+    MinInt = 12.0f;
+    RangeInt = 6.0f;
+  } else if (CurrentPhase == 2) {
+    MinInt = 20.0f;
+    RangeInt = 10.0f;
+  } else if (CurrentPhase == 3) {
+    MinInt = 24.0f;
+    RangeInt = 10.0f;
+  } else if (CurrentPhase == 4) {
+    MinInt = 22.0f;
+    RangeInt = 10.0f;
+  } else if (CurrentPhase == 5) {
+    MinInt = 18.0f;
+    RangeInt = 8.0f;
+  }
+  NextDisasterSeconds = ElapsedSeconds + MinInt + RandomUnit() * RangeInt;
 }
 
 void UpdatePlanetIndicator(float Delta) {
@@ -312,18 +347,90 @@ void UpdatePlanetIndicator(float Delta) {
   float Response = 0.95f;
   TemperatureAxis += (TargetHeat - TemperatureAxis) * Response * Delta;
   AtmosphereAxis += (TargetAtmosphere - AtmosphereAxis) * Response * Delta;
+
+  // Apply Phase Thermodynamic Drift
+  int CurrentPhase = 1 + (int)(ElapsedSeconds / 60.0f);
+  if (CurrentPhase > 5) CurrentPhase = 5;
+
+  float HeatDrift = 0.0f;
+  float AtmosDrift = 0.0f;
+  if (CurrentPhase == 1) {
+    HeatDrift = 0.12f;
+    AtmosDrift = -0.15f;
+  } else if (CurrentPhase == 2) {
+    HeatDrift = 0.04f;
+    AtmosDrift = 0.18f;
+  } else if (CurrentPhase == 3) {
+    HeatDrift = -0.15f;
+    AtmosDrift = 0.05f;
+  } else if (CurrentPhase == 5) {
+    HeatDrift = 0.10f;
+    AtmosDrift = -0.05f;
+  }
+  TemperatureAxis += HeatDrift * Delta;
+  AtmosphereAxis += AtmosDrift * Delta;
+
   HeatPressure -= HeatPressure * 0.040f * Delta;
   AtmospherePressure -= AtmospherePressure * 0.035f * Delta;
   TemperatureAxis = ClampValue(TemperatureAxis, -1.15f, 1.15f);
   AtmosphereAxis = ClampValue(AtmosphereAxis, -1.15f, 1.15f);
   HeatPressure = ClampValue(HeatPressure, -1.1f, 1.1f);
   AtmospherePressure = ClampValue(AtmospherePressure, -1.1f, 1.1f);
+
+  // Update Visual offsets: slowly heal towards 0 if indicators are inside the safe zone (radius 0.33),
+  // otherwise accumulate extreme axis damage as persistent offset (scarring).
+  if ((float)fabs(TemperatureAxis) <= 0.33f) {
+    VisualTemperatureOffset -= VisualTemperatureOffset * 0.08f * Delta;
+  } else {
+    VisualTemperatureOffset += (TemperatureAxis - VisualTemperatureOffset) * 0.03f * Delta;
+  }
+
+  if ((float)fabs(AtmosphereAxis) <= 0.33f) {
+    VisualAtmosphereOffset -= VisualAtmosphereOffset * 0.08f * Delta;
+  } else {
+    VisualAtmosphereOffset += (AtmosphereAxis - VisualAtmosphereOffset) * 0.03f * Delta;
+  }
+
+  VisualTemperatureAxis = ClampValue(TemperatureAxis + VisualTemperatureOffset, -1.15f, 1.15f);
+  VisualAtmosphereAxis = ClampValue(AtmosphereAxis + VisualAtmosphereOffset, -1.15f, 1.15f);
 }
 
 void UpdateEvolution(float Delta) {
   float Progress = ClampValue(ElapsedSeconds / GameDuration, 0.0f, 1.0f);
+  
+  // Calculate magma/scorched coverage
+  int MagmaCount = 0;
+  for (size_t I = 0; I < PlanetFaces.size(); I++) {
+    if (PlanetFaces[I].Biome == BiomeMagma || PlanetFaces[I].Biome == BiomeScorched) {
+      MagmaCount++;
+    }
+  }
+  float MagmaFraction = PlanetFaces.empty() ? 0.0f : (float)MagmaCount / (float)PlanetFaces.size();
+  bool HighMagmaCoverage = (MagmaFraction > 0.25f);
+  
+  // Global hostility checks (temperature or atmosphere offsets > 0.40, or high magma)
+  bool HostileGlobal = (fabs(VisualTemperatureAxis) > 0.40f || 
+                        fabs(VisualAtmosphereAxis) > 0.40f || 
+                        HighMagmaCoverage);
+
   for (size_t I = 0; I < PlanetFaces.size(); I++) {
     Face &F = PlanetFaces[I];
+
+    // Ice Melting Cycle
+    if (F.Biome == BiomeIce && TemperatureAxis > -0.30f) {
+      Vector3 NormCenter = NormalizeVector(F.Center);
+      float Polar = (float)fabs(NormCenter.Y);
+      if (Polar < 0.78f || TemperatureAxis > 0.25f) {
+        F.Locked = false;
+        int Target = MatureBiomeForFace(F, Progress);
+        if (Target != BiomeIce) {
+          ApplyMatureBiome(F, Target);
+        } else {
+          ApplyMatureBiome(F, BiomeLand);
+        }
+      }
+    }
+
     bool CanEvolve = !F.Locked || Progress > 0.46f;
     if (CanEvolve) {
       int Target = MatureBiomeForFace(F, Progress);
@@ -358,10 +465,10 @@ void UpdateEvolution(float Delta) {
                                           AtmosphereAxis * AtmosphereAxis);
       bool SafeZone = (BalanceDistance <= SafeBalanceRadius);
 
-      if (SafeZone) {
+      if (SafeZone && !HostileGlobal) {
         float GrowChance = 0.005f * Delta;
         if (RandomUnit() < GrowChance) {
-          if (F.EcosystemLevel == 0 && Progress >= 0.15f) {
+          if (F.EcosystemLevel == 0 && Progress >= 0.20f) { // Restrict newborn planet (Hadean, Phase 1) spawning
             if (F.Biome == BiomeOcean || F.Biome == BiomeLand || F.Biome == BiomeForest) {
               F.EcosystemLevel = 1;
             }
@@ -435,7 +542,16 @@ void CheckWinLose() {
                                       AtmosphereAxis * AtmosphereAxis);
   if (ElapsedSeconds >= GameDuration) {
     GameOver = true;
-    GameWon = BalanceDistance <= SafeBalanceRadius;
+    if (BalanceDistance <= 0.33f) {
+      GameWonStatus = 2; // Absolute Win (Green)
+      GameWon = true;
+    } else if (BalanceDistance <= SafeBalanceRadius) { // 0.66
+      GameWonStatus = 1; // Unstable Habitability (Yellow)
+      GameWon = true;
+    } else {
+      GameWonStatus = 0; // Collapsed (Red)
+      GameWon = false;
+    }
   }
 }
 
@@ -444,16 +560,16 @@ void UpdateAudio() {
     SoundSystem::TargetVolume = 0.0f;
     return;
   }
-  float BalanceDistance = (float)sqrt(TemperatureAxis * TemperatureAxis +
-                                      AtmosphereAxis * AtmosphereAxis);
+  float BalanceDistance = (float)sqrt(VisualTemperatureAxis * VisualTemperatureAxis +
+                                      VisualAtmosphereAxis * VisualAtmosphereAxis);
   bool SafeZone = (BalanceDistance <= SafeBalanceRadius);
-  if (TemperatureAxis > 0.40f) {
+  if (VisualTemperatureAxis > 0.40f) {
     SoundSystem::Waveform = 2;
-    SoundSystem::TargetFrequency = 60.0f + TemperatureAxis * 40.0f;
+    SoundSystem::TargetFrequency = 60.0f + VisualTemperatureAxis * 40.0f;
     SoundSystem::TargetVolume = 0.16f;
-  } else if (TemperatureAxis < -0.40f) {
+  } else if (VisualTemperatureAxis < -0.40f) {
     SoundSystem::Waveform = 1;
-    SoundSystem::TargetFrequency = 800.0f - TemperatureAxis * 300.0f;
+    SoundSystem::TargetFrequency = 800.0f - VisualTemperatureAxis * 300.0f;
     SoundSystem::TargetVolume = 0.08f;
   } else {
     SoundSystem::Waveform = 0;
@@ -474,12 +590,40 @@ void Timer(int Value) {
   if (Delta > 0.10f) {
     Delta = 0.10f;
   }
+  
+  if (InMainMenu) {
+    ElapsedSeconds += Delta;
+    CameraYaw += 7.0f * Delta;
+    if (CameraYaw > 360.0f) CameraYaw -= 360.0f;
+    SoundSystem::TargetVolume = 0.0f;
+    UpdateObjects(Delta);
+    glutPostRedisplay();
+    glutTimerFunc(16, Timer, 0);
+    return;
+  }
+
   if (!GamePaused && !GameOver) {
     ElapsedSeconds += Delta;
+    
+    // Phase detection & transition trigger
+    int CurrentPhase = 1 + (int)(ElapsedSeconds / 60.0f);
+    if (CurrentPhase > 5) CurrentPhase = 5;
+    if (CurrentPhase != LastPhase) {
+      LastPhase = CurrentPhase;
+      PhaseBannerSeconds = 5.0f;
+      PlaySfx(1);
+    }
+    
+    if (PhaseBannerSeconds > 0.0f) {
+      PhaseBannerSeconds -= Delta;
+    }
+
     UpdateEvolution(Delta);
     UpdatePlanetIndicator(Delta);
     if (ElapsedSeconds >= NextDisasterSeconds && DisasterKind == DisasterNone) {
-      BeginDisaster();
+      if (GameDuration - ElapsedSeconds > 18.0f) {
+        BeginDisaster();
+      }
     }
     if (DisasterCountdown > 0.0f) {
       DisasterCountdown -= Delta;
@@ -508,7 +652,7 @@ void ResetGame() {
   DisasterKind = DisasterNone;
   DisasterTargetFace = -1;
   ElapsedSeconds = 0.0f;
-  NextDisasterSeconds = FirstDisasterTime;
+  NextDisasterSeconds = 12.0f; // First disaster at 12.0s
   DisasterCountdown = 0.0f;
   AlertSeconds = 0.0f;
   TemperatureAxis = 0.24f;
@@ -516,13 +660,30 @@ void ResetGame() {
   HeatPressure = 0.0f;
   AtmospherePressure = 0.0f;
   CloudRotation = 0.0f;
+  
+  VisualTemperatureAxis = 0.24f;
+  VisualAtmosphereAxis = 0.20f;
+  VisualTemperatureOffset = 0.0f;
+  VisualAtmosphereOffset = 0.0f;
+  PhaseBannerSeconds = 5.0f; // Show banner for phase 1 at start
+  LastPhase = 0;
+  GameWonStatus = 0;
+  
   GameOver = false;
   GameWon = false;
   GamePaused = false;
+  InMainMenu = false;
   UpdateAllGeometry();
 }
 
 void Keyboard(unsigned char Key, int X, int Y) {
+  if (InMainMenu) {
+    if (Key == 13 || Key == ' ' || Key == 's' || Key == 'S') {
+      InMainMenu = false;
+      ResetGame();
+    }
+    return;
+  }
   if (Key >= '1' && Key <= '8') {
     SelectedTool = Key - '1';
   } else if (Key == 'p' || Key == 'P') {
@@ -535,6 +696,13 @@ void Keyboard(unsigned char Key, int X, int Y) {
 }
 
 void Mouse(int Button, int State, int X, int Y) {
+  if (InMainMenu) {
+    if (Button == GLUT_LEFT_BUTTON && State == GLUT_DOWN) {
+      InMainMenu = false;
+      ResetGame();
+    }
+    return;
+  }
   if (Button == 3 && State == GLUT_DOWN) {
     CameraDistance = ClampValue(CameraDistance - 0.42f, 4.0f, 12.0f);
     return;
@@ -603,7 +771,9 @@ void InitOpenGl() {
   glLightModelfv(GL_LIGHT_MODEL_AMBIENT, GlobalAmbient);
   glLightModeli(GL_LIGHT_MODEL_TWO_SIDE, GL_TRUE);
   BuildDisplayLists();
+  GenerateLowPolyTexture();
   ResetGame();
+  InMainMenu = true;
   SoundSystem::Start();
 }
 

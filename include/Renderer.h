@@ -17,5 +17,7 @@ void DrawParticles();
 void DrawAtmosphereRing();
 void DrawHolographicRing();
 void DrawOverlay();
+extern GLuint LowPolyTextureId;
+void GenerateLowPolyTexture();
 
 #endif
