@@ -460,6 +460,48 @@ void BuildDisplayLists() {
   }
   glEnd();
   glEndList();
+
+  HutList = glGenLists(1);
+  glNewList(HutList, GL_COMPILE);
+  glPushMatrix();
+  SetMaterial(0.48f, 0.36f, 0.28f, false, false);
+  DrawBlock(0.12f, 0.10f, 0.12f);
+  glTranslatef(0.0f, 0.10f, 0.0f);
+  SetMaterial(0.85f, 0.72f, 0.38f, false, false);
+  DrawLowPolyCone(0.09f, 0.11f, 5);
+  glPopMatrix();
+  glEndList();
+
+  AnimalList = glGenLists(1);
+  glNewList(AnimalList, GL_COMPILE);
+  glPushMatrix();
+  SetMaterial(0.76f, 0.58f, 0.40f, false, false);
+  glTranslatef(0.0f, 0.04f, 0.0f);
+  DrawBlock(0.09f, 0.05f, 0.06f);
+  glPushMatrix();
+  glTranslatef(0.04f, 0.04f, 0.0f);
+  SetMaterial(0.82f, 0.65f, 0.46f, false, false);
+  DrawBlock(0.04f, 0.04f, 0.04f);
+  glPopMatrix();
+  SetMaterial(0.68f, 0.50f, 0.34f, false, false);
+  glPushMatrix();
+  glTranslatef(0.035f, -0.04f, 0.02f);
+  DrawBlock(0.015f, 0.04f, 0.015f);
+  glPopMatrix();
+  glPushMatrix();
+  glTranslatef(0.035f, -0.04f, -0.02f);
+  DrawBlock(0.015f, 0.04f, 0.015f);
+  glPopMatrix();
+  glPushMatrix();
+  glTranslatef(-0.035f, -0.04f, 0.02f);
+  DrawBlock(0.015f, 0.04f, 0.015f);
+  glPopMatrix();
+  glPushMatrix();
+  glTranslatef(-0.035f, -0.04f, -0.02f);
+  DrawBlock(0.015f, 0.04f, 0.015f);
+  glPopMatrix();
+  glPopMatrix();
+  glEndList();
 }
 
 void DrawPlanet() {
@@ -556,6 +598,27 @@ void DrawSurfaceObjects() {
       glPopMatrix();
     }
 
+    if (F.Biome == BiomeMagma) {
+      // Ash particles rising
+      for (int AIdx = 0; AIdx < 2; AIdx++) {
+        float Lifetime = ElapsedSeconds * 0.8f + (float)AIdx * 0.5f;
+        float Fraction = Lifetime - (int)Lifetime;
+        float H = 0.02f + Fraction * 0.12f;
+        float Spread = Fraction * 0.022f;
+        float Angle = F.Seed * Pi * 10.0f + (float)AIdx * 3.14f;
+        glPushMatrix();
+        Vector3 P = AddVector(F.Center, ScaleVector(F.Normal, H));
+        Vector3 Offset = AddVector(ScaleVector(Tangent, (float)cos(Angle) * Spread),
+                                   ScaleVector(Bitangent, (float)sin(Angle) * Spread));
+        Vector3 FinalPos = AddVector(P, Offset);
+        glTranslatef(FinalPos.X, FinalPos.Y, FinalPos.Z);
+        SetMaterial(0.92f, 0.38f - Fraction * 0.28f, 0.08f, false, true);
+        float PartScale = (1.0f - Fraction) * 0.009f;
+        glutSolidCube(PartScale);
+        glPopMatrix();
+      }
+    }
+
     // Ecosystem rendering based on EcosystemLevel
     if (F.EcosystemLevel >= 1) {
       // Level 1: Microbial green algae patches (flat hex cells)
@@ -575,6 +638,21 @@ void DrawSurfaceObjects() {
           glVertex3f((float)cos(Angle) * 0.022f, 0.0f, (float)sin(Angle) * 0.022f);
         }
         glEnd();
+        glPopMatrix();
+      }
+
+      // Bioluminescent floating spores
+      for (int SIdx = 0; SIdx < 3; SIdx++) {
+        float A = F.Seed * Pi * 5.0f + (float)SIdx * 2.0f;
+        float R = 0.03f + 0.015f * (float)SIdx;
+        float HeightOffset = 0.015f + 0.02f * (float)SIdx + (float)sin(ElapsedSeconds * 2.5f + F.Seed * 10.0f + SIdx) * 0.006f;
+        Vector3 Offset = AddVector(ScaleVector(Tangent, (float)cos(A) * R),
+                                   ScaleVector(Bitangent, (float)sin(A) * R));
+        glPushMatrix();
+        Vector3 P = AddVector(AddVector(F.Center, Offset), ScaleVector(F.Normal, HeightOffset));
+        glTranslatef(P.X, P.Y, P.Z);
+        SetMaterial(0.3f, 0.95f, 0.4f, false, true); // glow = true
+        glutSolidCube(0.012f);
         glPopMatrix();
       }
     }
@@ -602,6 +680,23 @@ void DrawSurfaceObjects() {
         DrawLowPolyCone(0.032f, 0.048f, 4);
         glPopMatrix();
       }
+
+      // Animated wandering quadruped animal
+      glPushMatrix();
+      float WalkAngle = ElapsedSeconds * 0.85f + F.Seed * Pi * 4.0f;
+      float WalkRadius = 0.045f;
+      Vector3 AnimalOffset = AddVector(ScaleVector(Tangent, (float)cos(WalkAngle) * WalkRadius),
+                                       ScaleVector(Bitangent, (float)sin(WalkAngle) * WalkRadius));
+      Vector3 AnimalPos = AddVector(F.Center, ScaleVector(F.Normal, 0.001f));
+      float Bob = (float)fabs(sin(ElapsedSeconds * 5.0f + F.Seed * 8.0f)) * 0.007f;
+      Vector3 BobbedPos = AddVector(AnimalPos, AddVector(AnimalOffset, ScaleVector(F.Normal, Bob)));
+      glTranslatef(BobbedPos.X, BobbedPos.Y, BobbedPos.Z);
+      AlignToNormal(F.Normal);
+      float DirectionAngle = WalkAngle + Pi / 2.0f;
+      glRotatef(DirectionAngle * 180.0f / Pi, 0.0f, 1.0f, 0.0f);
+      glScalef(0.42f, 0.42f, 0.42f);
+      glCallList(AnimalList);
+      glPopMatrix();
     }
 
     if (F.EcosystemLevel >= 3) {
@@ -615,15 +710,10 @@ void DrawSurfaceObjects() {
         Vector3 P = AddVector(AddVector(F.Center, Offset), ScaleVector(F.Normal, 0.001f));
         glTranslatef(P.X, P.Y, P.Z);
         AlignToNormal(F.Normal);
+        glRotatef(F.Seed * 360.0f + (float)HIdx * 90.0f, 0.0f, 1.0f, 0.0f);
 
-        // Hut base body (cylinder/cone)
-        SetMaterial(0.48f, 0.34f, 0.22f, false, false);
-        DrawLowPolyCone(0.026f, 0.032f, 5);
-
-        // Hut straw roof (yellow cone)
-        glTranslatef(0.0f, 0.026f, 0.0f);
-        SetMaterial(0.90f, 0.74f, 0.28f, false, false);
-        DrawLowPolyCone(0.030f, 0.022f, 5);
+        glScalef(0.35f, 0.35f, 0.35f);
+        glCallList(HutList);
         glPopMatrix();
       }
 
@@ -647,6 +737,21 @@ void DrawSurfaceObjects() {
       float FlamePulse = 1.0f + (float)sin(ElapsedSeconds * 12.0f) * 0.16f;
       SetMaterial(1.0f, 0.54f, 0.08f, false, true); // Glow = true
       DrawLowPolyCone(0.009f, 0.022f * FlamePulse, 4);
+
+      // Rising fire particles
+      for (int FIdx = 0; FIdx < 3; FIdx++) {
+        float Lifetime = ElapsedSeconds * 1.6f + (float)FIdx * 0.33f;
+        float Fraction = Lifetime - (int)Lifetime;
+        float H = 0.012f + Fraction * 0.045f;
+        float Spread = Fraction * 0.006f;
+        float Angle = F.Seed * Pi * 8.0f + (float)FIdx * 2.09f;
+        glPushMatrix();
+        glTranslatef((float)cos(Angle) * Spread, H, (float)sin(Angle) * Spread);
+        SetMaterial(1.0f, 0.85f - Fraction * 0.65f, 0.1f, false, true);
+        float PartScale = (1.0f - Fraction) * 0.008f;
+        DrawLowPolyCone(PartScale, PartScale * 1.5f, 3);
+        glPopMatrix();
+      }
       glPopMatrix();
     }
   }
@@ -774,17 +879,22 @@ void DrawMeteors() {
 }
 
 void DrawParticles() {
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
   glDisable(GL_LIGHTING);
   glLineWidth(2.0f);
   glBegin(GL_LINES);
   for (size_t I = 0; I < Particles.size(); I++) {
     Particle &P = Particles[I];
     if (P.Kind == 0) {
-      glColor3f(0.25f, 0.50f, 1.0f);
+      glColor4f(0.25f, 0.50f, 1.0f, 0.85f);
     } else if (P.Kind == 1) {
-      glColor3f(0.94f, 0.98f, 0.93f);
+      glColor4f(0.94f, 0.98f, 0.93f, 0.90f);
+    } else if (P.Kind == 3) {
+      float Alpha = ClampValue(P.Life / 1.5f, 0.0f, 1.0f) * 0.60f;
+      glColor4f(0.88f, 0.88f, 0.92f, Alpha);
     } else {
-      glColor3f(0.95f, 0.22f, 0.06f);
+      glColor4f(0.95f, 0.22f, 0.06f, 0.85f);
     }
     Vector3 Tail = SubtractVector(P.Position, ScaleVector(P.Velocity, 0.08f));
     glVertex3f(P.Position.X, P.Position.Y, P.Position.Z);
@@ -792,6 +902,7 @@ void DrawParticles() {
   }
   glEnd();
   glEnable(GL_LIGHTING);
+  glDisable(GL_BLEND);
 }
 
 void DrawAtmosphereRing() {
@@ -913,20 +1024,24 @@ void DrawOverlay() {
     return;
   }
 
-  // Left Sidebar background panel
-  glColor4f(0.04f, 0.05f, 0.08f, 0.88f);
+  // Left Sidebar background panel - translucent dark blue/gray glassmorphism gradient
   glBegin(GL_QUADS);
+  glColor4f(0.01f, 0.02f, 0.04f, 0.82f);
   glVertex2f(0.0f, 0.0f);
+  glColor4f(0.03f, 0.05f, 0.09f, 0.70f);
   glVertex2f(188.0f, 0.0f);
+  glColor4f(0.04f, 0.06f, 0.12f, 0.65f);
   glVertex2f(188.0f, (float)WindowHeight);
+  glColor4f(0.02f, 0.03f, 0.06f, 0.78f);
   glVertex2f(0.0f, (float)WindowHeight);
   glEnd();
 
-  // Left Sidebar vertical accent line
-  glColor4f(0.32f, 0.40f, 0.50f, 0.40f);
-  glLineWidth(2.0f);
+  // Left Sidebar vertical accent line - dual color glowing border
+  glLineWidth(2.5f);
   glBegin(GL_LINES);
+  glColor4f(0.20f, 0.35f, 0.50f, 0.10f);
   glVertex2f(188.0f, 0.0f);
+  glColor4f(0.35f, 0.75f, 0.95f, 0.55f);
   glVertex2f(188.0f, (float)WindowHeight);
   glEnd();
   glLineWidth(1.0f);
@@ -955,34 +1070,41 @@ void DrawOverlay() {
     bool Selected = (SelectedTool == I);
 
     if (Selected) {
-      float Pulse = (float)sin(ElapsedSeconds * 6.0f) * 0.15f + 0.75f;
-      glColor4f(0.92f, 0.76f, 0.20f, Pulse);
-      glBegin(GL_LINE_LOOP);
-      glVertex2f(14.0f, Y - 23.0f);
-      glVertex2f(172.0f, Y - 23.0f);
-      glVertex2f(172.0f, Y + 13.0f);
-      glVertex2f(14.0f, Y + 13.0f);
-      glEnd();
-
-      glColor4f(0.10f, 0.16f, 0.26f, 0.90f);
-    } else {
-      glColor4f(0.18f, 0.20f, 0.24f, 0.40f);
-      glBegin(GL_LINE_LOOP);
+      glColor4f(0.12f, 0.22f, 0.38f, 0.60f);
+      glBegin(GL_QUADS);
       glVertex2f(16.0f, Y - 21.0f);
       glVertex2f(170.0f, Y - 21.0f);
       glVertex2f(170.0f, Y + 11.0f);
       glVertex2f(16.0f, Y + 11.0f);
       glEnd();
 
-      glColor4f(0.06f, 0.08f, 0.10f, 0.55f);
-    }
+      float Pulse = (float)sin(ElapsedSeconds * 6.0f) * 0.15f + 0.80f;
+      glColor4f(0.95f, 0.80f, 0.25f, Pulse);
+      glLineWidth(2.0f);
+      glBegin(GL_LINE_LOOP);
+      glVertex2f(14.0f, Y - 23.0f);
+      glVertex2f(172.0f, Y - 23.0f);
+      glVertex2f(172.0f, Y + 13.0f);
+      glVertex2f(14.0f, Y + 13.0f);
+      glEnd();
+      glLineWidth(1.0f);
+    } else {
+      glColor4f(0.04f, 0.06f, 0.09f, 0.40f);
+      glBegin(GL_QUADS);
+      glVertex2f(16.0f, Y - 21.0f);
+      glVertex2f(170.0f, Y - 21.0f);
+      glVertex2f(170.0f, Y + 11.0f);
+      glVertex2f(16.0f, Y + 11.0f);
+      glEnd();
 
-    glBegin(GL_QUADS);
-    glVertex2f(16.0f, Y - 21.0f);
-    glVertex2f(170.0f, Y - 21.0f);
-    glVertex2f(170.0f, Y + 11.0f);
-    glVertex2f(16.0f, Y + 11.0f);
-    glEnd();
+      glColor4f(0.35f, 0.55f, 0.75f, 0.20f);
+      glBegin(GL_LINE_LOOP);
+      glVertex2f(16.0f, Y - 21.0f);
+      glVertex2f(170.0f, Y - 21.0f);
+      glVertex2f(170.0f, Y + 11.0f);
+      glVertex2f(16.0f, Y + 11.0f);
+      glEnd();
+    }
 
     if (I == ToolTree) {
       glColor3f(0.15f, 0.55f, 0.20f);

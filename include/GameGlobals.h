@@ -62,6 +62,8 @@ extern GLuint VolcanoList;
 extern GLuint MountainList;
 extern GLuint MountainSnowList;
 extern GLuint IceClusterList;
+extern GLuint HutList;
+extern GLuint AnimalList;
 
 extern GLdouble PickModelMatrix[16];
 extern GLdouble PickProjectionMatrix[16];

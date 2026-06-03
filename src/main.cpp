@@ -202,13 +202,15 @@ void ApplyTool(int FaceIndex) {
     AtmospherePressure += 0.12f;
     PlaySfx(1);
   } else if (SelectedTool == ToolRain) {
+    bool WasHot = (F.Biome == BiomeMagma || F.Biome == BiomeScorched);
     AffectNeighbors(FaceIndex, 0.23f, BiomeLand, 0, 0.005f, true);
-    SpawnParticlesOnFace(FaceIndex, 0, 48);
+    SpawnParticlesOnFace(FaceIndex, WasHot ? 3 : 0, 48);
     HeatPressure -= 0.10f;
     PlaySfx(3);
   } else if (SelectedTool == ToolIce) {
+    bool WasHot = (F.Biome == BiomeMagma || F.Biome == BiomeScorched);
     AffectNeighbors(FaceIndex, 0.23f, BiomeIce, 0, 0.01f, true);
-    SpawnParticlesOnFace(FaceIndex, 1, 50);
+    SpawnParticlesOnFace(FaceIndex, WasHot ? 3 : 1, 50);
     HeatPressure -= 0.20f;
     PlaySfx(1);
   } else if (SelectedTool == ToolFire) {
@@ -508,11 +510,32 @@ void UpdateObjects(float Delta) {
     } else if (Particles[I].Kind == 2) {
       Vel.X += (float)sin(Particles[I].Life * 12.0f) * 0.08f;
       Vel.Z += (float)cos(Particles[I].Life * 12.0f) * 0.08f;
+    } else if (Particles[I].Kind == 3) {
+      Vel = ScaleVector(Vel, 0.40f);
+      Vel.Y += 0.28f;
+      Vel.X += (float)sin(ElapsedSeconds * 2.0f + Particles[I].Life * 5.0f) * 0.05f;
+      Vel.Z += (float)cos(ElapsedSeconds * 2.0f + Particles[I].Life * 5.0f) * 0.05f;
     }
     Particles[I].Position = AddVector(
         Particles[I].Position, ScaleVector(Vel, Delta));
     Particles[I].Life -= Delta;
   }
+  
+  // Ambient snow flurries when cold or during Ice Age
+  if (DisasterKind == DisasterIceAge || TemperatureAxis < -0.30f) {
+    if (RandomUnit() < 0.12f && !PlanetFaces.empty()) {
+      int FaceIdx = rand() % (int)PlanetFaces.size();
+      Face &F = PlanetFaces[FaceIdx];
+      Particle P;
+      Vector3 N = F.Normal;
+      P.Position = AddVector(F.Center, ScaleVector(N, 1.4f + RandomUnit() * 0.6f));
+      P.Velocity = ScaleVector(N, -0.45f - RandomUnit() * 0.20f);
+      P.Life = 2.0f + RandomUnit() * 1.5f;
+      P.Kind = 1;
+      Particles.push_back(P);
+    }
+  }
+
   std::vector<Particle> AliveParticles;
   for (size_t I = 0; I < Particles.size(); I++) {
     if (Particles[I].Life > 0.0f) {

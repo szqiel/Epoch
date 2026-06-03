@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include "SoundSystem.h"
 #include "GameConfig.h"
+#include "GameGlobals.h"
 
 namespace SoundSystem {
   HWAVEOUT hWaveOut = NULL;
@@ -29,6 +30,7 @@ namespace SoundSystem {
     float Phase = 0.0f;
     float CurrentFreq = 220.0f;
     float CurrentVol = 0.05f;
+    float WindFilterState = 0.0f;
     
     WAVEFORMATEX Format;
     Format.wFormatTag = WAVE_FORMAT_PCM;
@@ -130,6 +132,20 @@ namespace SoundSystem {
         }
         
         CurrentBuf[I] = (short)((SampleVal * CurrentVol + SfxSample) * 32767.0f);
+        
+        // Wind Soundscape modulated by atmosphere thickness
+        float RawNoise = ((float)rand() / (float)RAND_MAX - 0.5f);
+        float GustMod = (float)sin(Phase * 0.04f) * 0.12f + 0.22f;
+        WindFilterState += (RawNoise - WindFilterState) * GustMod;
+        
+        float AtmosScale = (VisualAtmosphereAxis + 1.15f) / 2.3f;
+        if (AtmosScale < 0.0f) AtmosScale = 0.0f;
+        if (AtmosScale > 1.0f) AtmosScale = 1.0f;
+        
+        float WindVolume = AtmosScale * (0.045f + (float)sin(Phase * 0.04f) * 0.015f);
+        float WindSample = WindFilterState * WindVolume;
+        
+        CurrentBuf[I] = (short)((SampleVal * CurrentVol + SfxSample + WindSample) * 32767.0f);
         
         Phase += (CurrentFreq * Pi * 2.0f) / (float)SampleRate;
         if (Phase > Pi * 2.0f) {

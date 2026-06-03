@@ -58,6 +58,8 @@ GLuint VolcanoList = 0;
 GLuint MountainList = 0;
 GLuint MountainSnowList = 0;
 GLuint IceClusterList = 0;
+GLuint HutList = 0;
+GLuint AnimalList = 0;
 
 GLdouble PickModelMatrix[16];
 GLdouble PickProjectionMatrix[16];
